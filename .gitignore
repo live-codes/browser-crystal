@@ -1,0 +1,4 @@
+# Cross-compile intermediates: the wasm objects Crystal emits, and one build log
+# per sample. Only public/crystal/*.wasm is needed at run time, and that is
+# committed so a clone runs without Docker.
+# build/objects/

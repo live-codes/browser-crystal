@@ -1,0 +1,38 @@
+[
+  {
+    "id": "01-hello",
+    "title": "Hello, world",
+    "wasm": "01-hello.wasm",
+    "source": "# Strings, interpolation, ranges — the smallest useful thing.\nputs \"hello from Crystal, running in your browser\"\nputs \"compiled by Crystal #{Crystal::VERSION}\"\n\n1.upto(5) do |n|\n  puts \"#{n} squared is #{n * n}\"\nend\n\nwords = %w[crystal runs in the browser]\nputs \"sorted: #{words.sort.join(' ')}\"\nputs \"range sum: #{(1..100).sum}\"\n"
+  },
+  {
+    "id": "02-collections",
+    "title": "Arrays, hashes and blocks",
+    "wasm": "02-collections.wasm",
+    "source": "# Arrays, hashes, blocks and the Enumerable methods Crystal takes from Ruby.\nfruits = %w[pear apple fig banana cherry]\n\nputs \"all:        #{fruits}\"\nputs \"sorted:     #{fruits.sort}\"\nputs \"by length:  #{fruits.sort_by(&.size)}\"\nputs \"over four:  #{fruits.select { |fruit| fruit.size > 4 }.join(\", \")}\"\nputs \"lengths:    #{fruits.map(&.size)}\"\nputs \"total:      #{fruits.sum(&.size)}\"\n\ncounts = Hash(String, Int32).new(0)\n\"the quick brown fox jumps over the lazy dog\".each_char do |char|\n  counts[char.to_s] += 1 unless char == ' '\nend\n\ntop = counts.to_a.sort_by { |(_letter, count)| -count }.first(3)\nputs \"top letters: #{top.map { |(letter, count)| \"#{letter}=#{count}\" }.join(\", \")}\"\n\nsquares = (1..6).map { |n| n * n }\nputs \"squares:    #{squares}\"\nputs \"evens:      #{squares.select(&.even?)}\"\nputs \"sum:        #{squares.sum}\"\n"
+  },
+  {
+    "id": "03-types",
+    "title": "Classes, structs and modules",
+    "wasm": "03-types.wasm",
+    "source": "# Classes, structs, modules, operator overloading and method overloading.\nmodule Greeter\n  def greet(name : String) : String\n    \"Hello, #{name}!\"\n  end\nend\n\nstruct Point\n  getter x : Float64\n  getter y : Float64\n\n  def initialize(@x : Float64, @y : Float64)\n  end\n\n  def +(other : Point) : Point\n    Point.new(x + other.x, y + other.y)\n  end\n\n  def length : Float64\n    Math.sqrt(x ** 2 + y ** 2)\n  end\n\n  def to_s(io : IO) : Nil\n    io << \"(#{x}, #{y})\"\n  end\nend\n\nclass Counter\n  include Greeter\n\n  @count : Int32 = 0\n\n  def initialize(@name : String)\n  end\n\n  def tick : Int32\n    @count += 1\n  end\n\n  def to_s(io : IO) : Nil\n    io << \"#{@name}: #{@count}\"\n  end\nend\n\n# Two methods, same name, different argument types.\ndef describe(value : Int32) : String\n  \"Int32 #{value}\"\nend\n\ndef describe(value : String) : String\n  \"String #{value.inspect}\"\nend\n\na = Point.new(1.5, 2.0)\nb = Point.new(3.0, 4.5)\n\nputs \"a         = #{a}\"\nputs \"b         = #{b}\"\nputs \"a + b     = #{a + b}\"\nputs \"|a + b|   = #{(a + b).length.round(3)}\"\n\ncounter = Counter.new(\"ticker\")\n3.times { counter.tick }\nputs counter\nputs counter.greet(\"Crystal\")\nputs describe(42)\nputs describe(\"forty-two\")\n"
+  },
+  {
+    "id": "04-errors",
+    "title": "Errors without exceptions",
+    "wasm": "04-errors.wasm",
+    "source": "# Error handling without exceptions.\n#\n# `raise`/`rescue` do not work on the wasm target: raising traps the module with\n# `unreachable`, because there is no unwinder to run the handlers. So this sample\n# stays on the other side of Crystal's error handling — `null`-returning methods\n# and union types. See FINDINGS.md § \"Exceptions trap\".\n#\n# A `nil`-returning method instead of an exception.\ndef parse_int(text : String) : Int32?\n  text.strip.to_i?\nend\n\n[{\"twelve\", \"12\"}, {\"nope\", \"x\"}, {\"zero\", \"0\"}].each do |(label, text)|\n  case value = parse_int(text)\n  when Nil\n    puts \"#{label.ljust(6)} -> not a number\"\n  else\n    puts \"#{label.ljust(6)} -> #{value} (doubled: #{value * 2})\"\n  end\nend\n\n# Safe indexing: an out-of-range subscript is nil, not a raise.\nnumbers = [10, 20, 30]\n[0, 2, 5].each do |index|\n  number = numbers[index]?\n  puts \"numbers[#{index}] = #{number.nil? ? \"out of range\" : number}\"\nend\n\n# A union type makes the \"might not be there\" part of the type, so the compiler\n# will not let you forget it.\ndef first_word(text : String) : String?\n  text.split.first?\nend\n\n[\"crystal is fun\", \"\"].each do |text|\n  word = first_word(text)\n  puts \"first word of #{text.inspect}: #{word ? word.upcase : \"(none)\"}\"\nend\n"
+  },
+  {
+    "id": "05-stdin",
+    "title": "Reading stdin",
+    "wasm": "05-stdin.wasm",
+    "source": "# Reads stdin, which on this target is a WASI fd_read — so the page's stdin box\n# is what feeds it.\nprint \"how many numbers? \"\ncount = gets.try(&.to_i?) || 0\nputs \"reading #{count} of them\"\n\ntotal = 0\ncount.times do\n  line = gets\n  break unless line\n  total += line.to_i\nend\n\nputs \"sum:     #{total}\"\nputs \"average: #{count.zero? ? 0.0 : (total / count.to_f).round(2)}\"\n"
+  },
+  {
+    "id": "06-regex",
+    "title": "Regular expressions",
+    "wasm": "06-regex.wasm",
+    "source": "# Regex needs PCRE, which is a separate wasm build. Included on purpose: it is\n# the clearest example of a stdlib corner that does not link against wasi-libc\n# alone. See FINDINGS.md.\ntext = \"the quick brown fox jumps over the lazy dog\"\n\nfive_letters = text.scan(/\\b\\w{5}\\b/).map(&.[0])\nputs \"five-letter words: #{five_letters.join(\", \")}\"\n\ndigits = \"abc123def456ghi\".scan(/\\d+/).map(&.[0])\nputs \"digit runs:        #{digits.join(\", \")}\"\n\nputs \"hashed:            #{text.gsub(/\\s+/, \"-\")}\"\n"
+  }
+]

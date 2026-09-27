@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crystal in the browser — proof of concept</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --line: #8883;
+    --dim: #888;
+    --ok: #2f9e44;
+    --err: #d0334a;
+    --busy: #b8860b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         font: 14px/1.5 system-ui, sans-serif; }
+
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .note { color: var(--dim); font-size: 12.5px; margin-top: 6px; max-width: 90ch; }
+  .note strong { color: inherit; font-weight: 600; }
+  select, button, textarea { font: inherit; }
+  select, button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+                   background: canvas; color: inherit; }
+  button { font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  kbd { font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line);
+        border-radius: 3px; padding: 0 3px; }
+  #status { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
+  #status[data-state="ok"] { color: var(--ok); }
+  #status[data-state="bad"] { color: var(--err); }
+  #status[data-state="busy"] { color: var(--busy); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  section { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  section + section { border-left: 1px solid var(--line); }
+  h2 { margin: 0; padding: 8px 14px 4px; font-size: 11px; font-weight: 600;
+       letter-spacing: .05em; text-transform: uppercase; color: var(--dim); }
+  pre { margin: 0; padding: 4px 14px 20px; overflow: auto; flex: 1;
+        font: 13px/1.5 var(--mono); white-space: pre; tab-size: 2; }
+  #source { color: inherit; }
+  #output { white-space: pre-wrap; word-break: break-word; }
+  #output .empty { color: var(--dim); }
+  #output .err { color: var(--err); }
+
+  .stdin { border-top: 1px solid var(--line); padding: 8px 14px 12px; }
+  .stdin label { display: block; font-size: 11px; letter-spacing: .05em;
+                 text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+  .stdin textarea { width: 100%; height: 62px; resize: vertical; border: 1px solid var(--line);
+                    border-radius: 6px; padding: 6px 8px; background: canvas; color: inherit;
+                    font: 12.5px/1.4 var(--mono); }
+  .meta { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Crystal in the browser</h1>
+    <select id="sample" aria-label="Crystal sample"></select>
+    <button id="run" disabled>Run <kbd>Ctrl+Enter</kbd></button>
+    <button id="stop" disabled>Stop</button>
+    <span id="status">loading samples…</span>
+  </div>
+  <p class="note">
+    The programs below are <strong>real Crystal, compiled to WebAssembly, running in this tab</strong>
+    — no server, no upload, nothing fetched at run time. They were compiled <em>before</em> the page
+    was served, because Crystal's compiler cannot run in a browser: it is LLVM-based and self-hosted,
+    and no build of it exists for WebAssembly. So this page runs Crystal; it cannot compile what you
+    type. <a href="FINDINGS.md">Read the findings</a>.
+  </p>
+</header>
+
+<main>
+  <section>
+    <h2>Crystal source — compiled at build time</h2>
+    <pre id="source"></pre>
+  </section>
+  <section>
+    <h2>Output</h2>
+    <pre id="output"><span class="empty">Press Run.</span></pre>
+    <div class="stdin">
+      <label for="stdin">stdin — read by programs that call gets</label>
+      <textarea id="stdin" spellcheck="false" placeholder="5&#10;10&#10;20&#10;30&#10;40&#10;50"></textarea>
+      <div class="meta" id="meta"></div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const source = $('source'), output = $('output'), stdin = $('stdin'), status = $('status');
+const samplePicker = $('sample'), runButton = $('run'), stopButton = $('stop'), meta = $('meta');
+// Element ids as globals, so scripted checks can drive the page without string
+// literals. `status` is left out on purpose — window.status is a legacy built-in.
+Object.assign(window, { source, output, stdin, samplePicker, runButton, stopButton, meta });
+
+const state = document.documentElement.dataset;
+const RUN_TIMEOUT_MS = 20000;
+
+let samples = [];
+let worker = null;
+let busy = false;
+let watchdog = 0;
+let startedAt = 0;
+
+state.runs = '0';
+setState('idle', 'loading samples…');
+
+function setState(value, text) {
+  state.status = value;
+  status.dataset.state = value === 'ok' ? 'ok' : value === 'error' ? 'bad' : value === 'idle' ? '' : 'busy';
+  status.textContent = text;
+}
+
+function append(kind, text) {
+  const span = document.createElement('span');
+  if (kind === 'stderr') span.className = 'err';
+  span.textContent = text;
+  output.append(span);
+  output.scrollTop = output.scrollHeight;
+}
+
+function clearOutput() {
+  output.textContent = '';
+}
+
+const current = () => samples[Number(samplePicker.value) || 0];
+
+function select() {
+  const entry = current();
+  if (!entry) return;
+  source.textContent = entry.source;
+  clearOutput();
+  output.innerHTML = '<span class="empty">Press Run.</span>';
+  meta.textContent = '';
+  state.sample = entry.id;
+  setState('idle', 'ready');
+}
+
+function makeWorker() {
+  const next = new Worker('./crystal-worker.js', { type: 'module' });
+  next.addEventListener('message', ({ data }) => onMessage(data));
+  next.addEventListener('error', (event) => {
+    finish();
+    setState('error', `worker error: ${event.message || 'unknown'}`);
+  });
+  return next;
+}
+
+function onMessage(message) {
+  switch (message.type) {
+    case 'phase':
+      state.stage = message.phase;
+      setState('running', message.phase === 'loading' ? 'loading module…' : 'running…');
+      break;
+
+    case 'stdout':
+      append('stdout', message.text);
+      break;
+
+    case 'stderr':
+      append('stderr', message.text);
+      break;
+
+    case 'exit':
+      clearTimeout(watchdog);
+      finish();
+      state.exitCode = String(message.exitCode);
+      state.ms = message.ms.toFixed(0);
+      meta.textContent = `${current().wasm} · run ${message.ms.toFixed(0)} ms`;
+      if (message.exitCode === 0) setState('ok', `done in ${message.ms.toFixed(0)} ms`);
+      else setState('error', `exited with code ${message.exitCode}`);
+      if (!output.textContent) output.innerHTML = '<span class="empty">(no output)</span>';
+      break;
+
+    case 'error':
+      clearTimeout(watchdog);
+      finish();
+      setState('error', 'failed');
+      append('stderr', `${message.message}\n`);
+      state.stage = 'error';
+      break;
+  }
+}
+
+function finish() {
+  busy = false;
+  runButton.disabled = false;
+  stopButton.disabled = true;
+  state.runs = String(Number(state.runs) + 1);
+}
+
+function run() {
+  const entry = current();
+  if (busy || !entry) return;
+
+  busy = true;
+  runButton.disabled = true;
+  stopButton.disabled = false;
+  clearOutput();
+  meta.textContent = '';
+  delete state.exitCode;
+  startedAt = performance.now();
+  setState('running', 'starting…');
+
+  worker.postMessage({
+    type: 'run',
+    wasmUrl: new URL(`./crystal/${entry.wasm}`, location.href).href,
+    name: `${entry.id}.wasm`,
+    stdin: stdin.value,
+  });
+
+  // The worker is the only handle on a program that will not stop on its own,
+  // so the timeout throws it away and builds a fresh one.
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    worker.terminate();
+    worker = makeWorker();
+    finish();
+    setState('error', `stopped after ${RUN_TIMEOUT_MS / 1000}s`);
+  }, RUN_TIMEOUT_MS);
+}
+
+runButton.addEventListener('click', run);
+stopButton.addEventListener('click', () => {
+  worker.terminate();
+  worker = makeWorker();
+  clearTimeout(watchdog);
+  finish();
+  setState('idle', 'stopped');
+});
+samplePicker.addEventListener('change', select);
+addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault();
+    run();
+  }
+});
+
+worker = makeWorker();
+
+try {
+  samples = await (await fetch('./crystal/samples.json')).json();
+} catch (error) {
+  setState('error', 'could not load samples.json');
+  throw error;
+}
+
+samples.forEach((entry, index) => {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = entry.title;
+  samplePicker.append(option);
+});
+samplePicker.value = '0';
+runButton.disabled = false;
+select();
+</script>
+</body>
+</html>
