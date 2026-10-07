@@ -41,8 +41,19 @@ set(CMAKE_SYSROOT "${WASI_SDK}/share/wasi-sysroot")
 # wasi-compat/include/wasi-compat.h and stubbed in wasi-compat/compat.c.
 set(WASI_DEFINES "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS")
 set(WASI_COMPAT "-I${CMAKE_CURRENT_LIST_DIR}/wasi-compat/include -include wasi-compat.h")
+# Compiled into LLVMSupport by a patch in patches/apply-patches.py, so that
+# executables linking it resolve the stubs.
+set(WASI_COMPAT_SOURCE "${CMAKE_CURRENT_LIST_DIR}/wasi-compat/compat.c")
 set(CMAKE_C_FLAGS_INIT "${WASI_DEFINES} ${WASI_COMPAT}")
 set(CMAKE_CXX_FLAGS_INIT "${WASI_DEFINES} ${WASI_COMPAT}")
+
+# The emulated libraries must be on the link line of every executable: with
+# _WASI_EMULATED_* set, the headers declare mmap/munmap, the process clocks and
+# the rest, and these archives define them. Standard libraries are appended
+# after the objects, which is where an archive has to be to resolve them.
+set(WASI_EMULATED_LIBS "-lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-getpid -lwasi-emulated-process-clocks")
+set(CMAKE_C_STANDARD_LIBRARIES "${WASI_EMULATED_LIBS}")
+set(CMAKE_CXX_STANDARD_LIBRARIES "${WASI_EMULATED_LIBS}")
 
 # LLVM archives are huge; make sure the compiler can find the sysroot without a
 # driver wrapper, and never pick up the host's libs/headers by accident.

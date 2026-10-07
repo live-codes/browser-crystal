@@ -84,6 +84,30 @@ RSS_NEW = """#if !defined(__HAIKU__) && !defined(__MVS__) && !defined(__wasi__)
     PeakMemory = static_cast<uint64_t>(Info.ru_maxrss);
 #endif"""
 
+# clang defines __wasm__ (lowercase) for wasm32 targets, but LLVM's ABI-macro
+# ladder tests __WASM__ (uppercase) -- so on WASI none of the branches match and
+# LLVM_ABI ends up undefined, which breaks every IR header that spells
+# `class LLVM_ABI Function`. Add the spelling clang actually emits.
+ABI_OLD = "#elif defined(__MACH__) || defined(__WASM__) || defined(__EMSCRIPTEN__)"
+ABI_NEW = "#elif defined(__MACH__) || defined(__WASM__) || defined(__EMSCRIPTEN__) ||  \\\n    defined(__wasm__)"
+
+# Build the WASI compatibility stubs into LLVMSupport so that every executable
+# linking it resolves the POSIX calls WASI lacks. WASI_COMPAT_SOURCE comes from
+# the toolchain file, so the native (host) build skips this.
+Z3_OLD = """if(LLVM_WITH_Z3)
+  target_include_directories(LLVMSupport SYSTEM
+    PRIVATE
+    ${Z3_INCLUDE_DIR}
+    )
+endif()"""
+Z3_NEW = Z3_OLD + """
+
+# WASI: compile the compatibility stubs into LLVMSupport (see
+# build/llvm-wasm/wasi-compat). Guarded, so native builds are unaffected.
+if(DEFINED WASI_COMPAT_SOURCE AND WASI_COMPAT_SOURCE)
+  target_sources(LLVMSupport PRIVATE "${WASI_COMPAT_SOURCE}")
+endif()"""
+
 PATCHES = [
     # wasi-libc ships <endian.h> (and <byteswap.h>), but the platform list in
     # ADT/bit.h does not know __wasi__, so it falls through to the generic
@@ -117,6 +141,9 @@ PATCHES = [
     # statvfs / rusage fields WASI's sysroot does not have.
     ("llvm/lib/Support/Unix/Path.inc", MNT_OLD, MNT_NEW),
     ("llvm/lib/Support/Unix/Program.inc", RSS_OLD, RSS_NEW),
+    # The ABI macro ladder, and compiling the compat stubs into LLVMSupport.
+    ("llvm/include/llvm/Support/Compiler.h", ABI_OLD, ABI_NEW),
+    ("llvm/lib/Support/CMakeLists.txt", Z3_OLD, Z3_NEW),
     # LLVM classifies platforms as Windows / Unix / Generic and aborts on
     # anything else. A custom CMAKE_SYSTEM_NAME of "WASI" matches none, so the
     # cross configure dies at HandleLLVMOptions.cmake:235 with "Unable to

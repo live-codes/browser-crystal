@@ -1,76 +1,75 @@
 # Status — libLLVM for wasm32-wasip1
 
-Working notes for the build in `build/llvm-wasm/`. Read the README first; this is
-the "where it stands right now" file.
+**Done: libLLVM 20.1.8 builds for wasm32-wasip1 and runs inside a wasm engine.**
+Working notes for `build/llvm-wasm/`. Read the README first.
 
-## What works
+## Result
 
-- LLVM **20.1.8** source fetches (147 MB, over a link that throttles a single
-  connection to ~20 KB/s — hence `fetch.sh`).
-- Host `llvm-tblgen` builds natively. ✅
-- The wasm32-wasip1 cross **configure succeeds** (`-DLLVM_TARGETS_TO_BUILD=WebAssembly`,
-  static, threads/EH/RTTI off). ✅
-- **`LLVMSupport` — and `LLVMDemangle` — build cleanly.** ✅ `libLLVMSupport.a`
-  is 164/164 objects, no errors. This is the library everything else depends on,
-  and the one that touches the most of the operating system, so it was the
-  hard one.
-
-```bash
-STAGE=host  bash build/llvm-wasm/build.sh   # native llvm-tblgen
-STAGE=conf  bash build/llvm-wasm/build.sh   # cross configure (applies patches)
-ninja -C /root/bc-llvm/build-wasi -k 0 LLVMSupport   # → lib/libLLVMSupport.a
-STAGE=cross bash build/llvm-wasm/build.sh   # build everything
+```
+$ STAGE=verify bash build/llvm-wasm/build.sh
+=== running under node WASI ===
+libLLVM 20.1.8
+wasm32 target registered
+CODEGEN BUILT (module constructed)      # the probe constructs an IR module
 ```
 
-## How Support was made to build
+`LLVMSupport`, `LLVMCore`, `LLVMIRReader`, `LLVMCodeGen`, `LLVMTarget`,
+`LLVMObject`, `LLVMBitReader`/`Writer`, `LLVMAnalysis`, and the whole
+**WebAssembly backend** — 99 static archives, 140 MB packaged — plus a 26.8 MB
+probe that links them all and exercises the C API. This is the artifact that does
+not exist anywhere to download.
 
-Two mechanisms, both in the repo:
+## What the pipeline does
 
-**1. Two source patches** (`patches/apply-patches.py`) and a platform-detection
-fix. Beyond the earlier ones (platform classification, `endian.h`, `sys/wait.h`,
-`alarm`, `getsid`), the last two were `Path.inc`'s `statvfs`/`MNT_LOCAL` branch
-and `Program.inc` reading `rusage::ru_maxrss`, which WASI's sysroot does not have.
+```
+llvm-project-20.1.8.src.tar.xz          147 MB, range-resumed (the link throttles)
+  → stage A: llvm-tblgen built natively
+  → stage B: cmake + toolchain-wasi.cmake + patches + wasi-compat
+             -DLLVM_TARGETS_TO_BUILD=WebAssembly, static, threads/EH/RTTI off
+             → 99 × libLLVM*.a for wasm32-wasip1
+  → stage C: pack archives + headers into out/
+  → stage D: verify/run-probe.sh links llvm-probe.c and runs it under Node WASI
+```
 
-**2. A small compatibility layer** (`wasi-compat/`), because wasi-libc declares
-none of the process/signal surface LLVM's Unix support layer uses:
+## How WASI was made to work
 
-- `wasi-compat/include/wasi-compat.h` — force-included into every TU. Declares
-  `sigset_t`, `struct sigaction`, `siginfo_t`, the `SA_*`/`SIG_*` constants,
-  `struct rlimit` and `RLIMIT_*`, `<sys/wait.h>`'s macros and calls, `fork`/
-  `exec*`/`wait*`/`setsid`/`dup2`, `struct passwd` and `getpwuid*`, `Dl_info`/
-  `dladdr`, the `fcntl` lock commands, `fchown`, `getuid`, `umask`.
-- `wasi-compat/include/pwd.h` — so LLVM's `Path.inc` `#include <pwd.h>` resolves.
-- `wasi-compat/compat.c` — the matching definitions. On WASI they are honest
-  stubs: `fork` cannot succeed, `sigaction` registers nothing. The Crystal
-  compiler never calls them; the point is that `libLLVMSupport.a` and
-  `libLLVMPasses.a` reference them, so a link must resolve them.
+**1. Source patches** — every edit in `patches/apply-patches.py`, idempotent and
+commented:
 
-The one thing deliberately **not** used is `__wasilibc_unmodified_upstream`.
-Switching it on does unlock much of this from musl's own headers, but it also
-makes `<errno.h>` reach for `<bits/errno.h>`, which wasi-libc does not ship — it
-expects a complete musl sysroot. Declaring the gaps explicitly is smaller and
-does not fight the SDK.
+| File | Why |
+| --- | --- |
+| `cmake/modules/HandleLLVMOptions.cmake` | LLVM aborts on an unknown platform; WASI joins Unix |
+| `include/llvm/ADT/bit.h` | wasi-libc has `<endian.h>`; the list didn't know `__wasi__` |
+| `include/llvm/Support/Compiler.h` | clang defines `__wasm__`, LLVM tested `__WASM__` → `LLVM_ABI` was undefined |
+| `lib/Support/Unix/Unix.h` | no `<sys/wait.h>` |
+| `lib/Support/Unix/Watchdog.inc` | no `alarm()` |
+| `lib/Support/Unix/Path.inc` | `statvfs`/`MNT_LOCAL` do not exist |
+| `lib/Support/Unix/Program.inc` | `rusage::ru_maxrss` does not exist |
+| `lib/Support/LockFileManager.cpp` | no `getsid()` |
+| `lib/Support/CMakeLists.txt` | exclude `CrashRecoveryContext.cpp` and `raw_socket_stream.cpp`; `PARTIAL_SOURCES_INTENDED`; compile the compat stubs into LLVMSupport |
+
+**2. A compatibility layer** (`wasi-compat/`) for the POSIX surface wasi-libc does
+not declare at all — force-included declarations (`wasi-compat.h`, `pwd.h`) and
+stub definitions (`compat.c`): `sigaction`/`sigset_t`/`rlimit`, `<sys/wait.h>`,
+`fork`/`exec`/`wait`/`setsid`/`dup2`, `pwd`, `Dl_info`/`dladdr`, `fcntl` locks,
+`fchown`/`getuid`/`umask`, `posix_madvise`.
+
+**3. Emulation switches** the SDK requires (`_WASI_EMULATED_SIGNAL/_MMAN/_GETPID/
+_PROCESS_CLOCKS`) plus the matching `-lwasi-emulated-*` on every link.
+
+Deliberately **not** used: `__wasilibc_unmodified_upstream`. It looks like it unlocks
+all of this from musl, but it makes `<errno.h>` want `<bits/errno.h>`, which
+wasi-libc does not ship — it expects a complete musl sysroot.
 
 ## What remains
 
-The full `STAGE=cross` build is the current step. Support was the worst of it;
-Core, IR, MC, Object, Bitcode, Analysis and the WebAssembly target are largely
-platform-independent, so they should need little or nothing. Any new failures
-will be in the same categories as Support's (a POSIX call WASI lacks) and the
-same two mechanisms should cover them.
+The Crystal compiler, cross-built against these libraries — the consumer this
+artifact was produced for. Nothing above needs to change for it; it links
+`out/lib/*.a` plus `wasi-compat/compat.c` and the emulated libraries, exactly as
+`verify/run-probe.sh` does, and it supplies its own `llvm-config`-style flags
+(`llvm-config` prints the host's; a wasm build needs the list above).
 
-After the libraries exist, `STAGE=pack` collects them and `STAGE=verify` links
-`verify/llvm-probe.c` against them and runs it, which proves the C API works
-inside a wasm engine — and `compat.c`'s object has to go on that link line
-(see `verify/run-probe.sh`).
-
-Then the long pole above it: the Crystal compiler itself, cross-built against
-these libraries.
-
-## The honest headline
-
-This is a port of LLVM's Unix support layer to a platform with no processes,
-signals or sockets — upstream-grade work nobody has published, which is why the
-artifact does not exist to download. But it is now demonstrably tractable, not
-blocked: the hardest library compiles, and every fix is small, understood and
-recorded here.
+Two things worth knowing for that step: the compiler will emit for
+`wasm32-wasip1` via the WebAssembly backend that is present here, and the parts of
+LLVM that need processes, signals or sockets are stubs — which is fine, because a
+compiler does not fork or install signal handlers.

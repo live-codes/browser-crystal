@@ -20,6 +20,12 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+/* compat.c is C, so these must have C linkage -- without this, C++ callers
+ * mangle the names and the linker cannot find compat.c's unmangled definitions. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ---------- sigset_t / signal sets ---------- */
 #ifndef __DEFINED_sigset_t
 #define __DEFINED_sigset_t
@@ -218,5 +224,9 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen,
 int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen,
                struct passwd **result);
 mode_t umask(mode_t mask);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* WASI_COMPAT_H */

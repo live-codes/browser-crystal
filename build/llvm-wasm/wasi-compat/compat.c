@@ -12,6 +12,7 @@
  * and link the object into anything that links libLLVM.
  */
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 
 #include "wasi-compat.h"
@@ -96,3 +97,11 @@ int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen,
 	return 0;
 }
 mode_t umask(mode_t mask) { (void)mask; return 0; }
+
+/* WASI's <sys/mman.h> declares posix_madvise under _WASI_EMULATED_MMAN, but
+ * libwasi-emulated-mman does not define it (only mmap/munmap/mprotect). It
+ * returns 0 for success, like the POSIX call. */
+int posix_madvise(void *addr, size_t len, int advice) {
+	(void)addr; (void)len; (void)advice;
+	return 0;
+}

@@ -13,3 +13,7 @@ build/llvm-wasm/out/
 # Python bytecode from patches/apply-patches.py
 __pycache__/
 *.pyc
+
+# Outputs of verify/run-probe.sh (regenerated on every verify)
+build/llvm-wasm/verify/*.o
+build/llvm-wasm/verify/*.wasm

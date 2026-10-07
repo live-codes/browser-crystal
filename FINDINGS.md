@@ -256,28 +256,27 @@ The browser run above was driven with the `agent-browser` CLI against headless C
 exposes `document.documentElement.dataset` (`status`, `stage`, `runs`, `exitCode`, `ms`, `sample`)
 and its element ids as globals, so the checks can read state and click Run without string literals.
 
-## 9. Update — producing the libLLVM ourselves
+## 9. Update — the libLLVM now exists
 
-A later effort stopped waiting for the missing artifact and set out to build it: `libLLVM`
-compiled to `wasm32-wasip1`, the one thing Crystal's compiler has to link and that exists
-nowhere to download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its live
-status is [`build/llvm-wasm/STATUS.md`](build/llvm-wasm/STATUS.md). What it established:
+A later effort stopped waiting for the missing artifact and built it: `libLLVM` compiled to
+`wasm32-wasip1`, the one thing Crystal's compiler has to link and that existed nowhere to
+download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its status is
+[`build/llvm-wasm/STATUS.md`](build/llvm-wasm/STATUS.md).
 
-- **The artifact has a reproducible path.** LLVM **20.1.8** — the newest release Crystal 1.17
-  accepts — cross-compiled with **wasi-sdk 33** (clang 22 → wasm32-wasip1), WebAssembly backend
-  only, static, threads/EH/RTTI off; host `llvm-tblgen` built natively. The cross **configure
-  succeeds**, and `LLVMSupport` compiles apart from four files.
-- **It is a port, not a build.** LLVM’s Unix support layer assumes an operating system that WASI
-  preview 1 is not. Every edit is recorded in `build/llvm-wasm/patches/apply-patches.py`
-  (platform detection, `endian.h`, `sys/wait.h`, `alarm`, `getsid`, and excluding the two
-  unreferenced pure-OS files `CrashRecoveryContext.cpp` and `raw_socket_stream.cpp`).
-- **What is left is bounded and named.** The four remaining files are the process/signal core —
-  `Unix/Path.inc` (`pwd.h`), `Unix/Process.inc` (`rlimit`, `dup2`, `sigfillset`), `Unix/Program.inc`
-  (`fork`, `execv`, `wait4`, `setsid`), `Unix/Signals.inc` (`sigaction`, `dladdr`). None of those
-  symbols exist in wasi-libc, so they must be stubbed with the symbol present but failing;
-  `STATUS.md` carries the exact error list to resume from.
-- **The §2 conclusion stands, now sharper.** The blocker is neither licensing nor appetite: the
-  compiler’s front end is fine, but the LLVM the compiler links has to be ported to a platform
-  with no processes, signals or sockets. This is upstream-grade work — which is precisely why the
-  artifact does not exist to download.
+- **It works.** LLVM **20.1.8** — the newest release Crystal 1.17 accepts — builds for
+  `wasm32-wasip1` with wasi-sdk 33 (clang 22), WebAssembly backend only: **99 static archives**,
+  140 MB packaged. A probe linked against all of them runs inside a Node WASI engine, calls the
+  LLVM C API, registers the wasm target and **constructs an IR module** — the compiler-side
+  capability this whole question turned on. That artifact did not exist anywhere to download;
+  it does now, reproducibly.
+- **It was a port, not a build.** LLVM's Unix support layer assumes an operating system that WASI
+  preview 1 is not. Every edit is in `build/llvm-wasm/patches/apply-patches.py`; the POSIX surface
+  wasi-libc omits entirely (`sigaction`, `sigset_t`, `rlimit`, `<sys/wait.h>`,
+  `fork`/`exec`/`wait`, `pwd`, `Dl_info`/`dladdr`, `fcntl` locks) is declared in
+  `build/llvm-wasm/wasi-compat/include/` and stubbed in `wasi-compat/compat.c`. On WASI those
+  stubs cannot do real work — there are no processes, signals or sockets — but a compiler does
+  not need them to.
+- **§2 is revised, not overturned.** Crystal's *own* compiler still cannot run in a browser
+  without further work — but the reason it could not is now gone. The remaining task is the
+  Crystal compiler port on top of a linkable wasm libLLVM, not the absence of one.
 

@@ -38,7 +38,7 @@ set -x
 "$CC" --target=wasm32-wasip1 --sysroot="$SYSROOT" $EMULATED $COMPAT -O1 \
 	-I"$LLVM_OUT/include" \
 	"$HERE/llvm-probe.c" -o "$HERE/llvm-probe.wasm" \
-	-Wl,--start-group "$HERE/compat.o" $LIBS -Wl,--end-group \
+	"$HERE/compat.o" $LIBS \
 	-lc++ -lc++abi \
 	-lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-getpid -lwasi-emulated-process-clocks 2>&1 | tail -40
 set +x
