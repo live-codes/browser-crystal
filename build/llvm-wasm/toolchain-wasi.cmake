@@ -35,10 +35,14 @@ set(CMAKE_SYSROOT "${WASI_SDK}/share/wasi-sysroot")
 # no-op implementations at link time (see verify/run-probe.sh). They are
 # emulation in name only: there are no real signals on WASI, so the parts of
 # LLVM that would install handlers simply never fire.
-set(WASI_EMULATED
-  "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS")
-set(CMAKE_C_FLAGS_INIT "${WASI_EMULATED}")
-set(CMAKE_CXX_FLAGS_INIT "${WASI_EMULATED}")
+#
+# What the emulated headers still omit -- struct sigaction, sigset_t, the sigset
+# functions, rlimit, fork/exec/wait, pwd, Dl_info -- is declared in
+# wasi-compat/include/wasi-compat.h and stubbed in wasi-compat/compat.c.
+set(WASI_DEFINES "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS")
+set(WASI_COMPAT "-I${CMAKE_CURRENT_LIST_DIR}/wasi-compat/include -include wasi-compat.h")
+set(CMAKE_C_FLAGS_INIT "${WASI_DEFINES} ${WASI_COMPAT}")
+set(CMAKE_CXX_FLAGS_INIT "${WASI_DEFINES} ${WASI_COMPAT}")
 
 # LLVM archives are huge; make sure the compiler can find the sysroot without a
 # driver wrapper, and never pick up the host's libs/headers by accident.

@@ -64,9 +64,12 @@ Env: `WORK` (build tree, default `/root/bc-llvm`), `CACHE` (downloads,
 | `llvm-wasm.lock.json` | Pinned LLVM + wasi-sdk inputs and why |
 | `fetch.sh` | Parallel, resumable download (the network throttles a single connection) |
 | `toolchain-wasi.cmake` | CMake cross toolchain file for wasm32-wasip1 |
+| `patches/apply-patches.py` | Every LLVM source edit, idempotent and commented |
+| `wasi-compat/` | Declarations + stub definitions for the POSIX calls WASI lacks |
 | `build.sh` | The four stages |
 | `verify/llvm-probe.c` | Links against the built libLLVM and exercises the C API |
 | `verify/run-probe.sh` | Compiles, links and runs the probe under Node's WASI |
+| `STATUS.md` | Live status: what builds, what remains |
 
 ## Status
 

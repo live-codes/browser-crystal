@@ -63,6 +63,27 @@ Watchdog::~Watchdog() {
 LOCKFILE_OLD = "#if LLVM_ON_UNIX && !defined(__ANDROID__)"
 LOCKFILE_NEW = "#if LLVM_ON_UNIX && !defined(__ANDROID__) && !defined(__wasi__)"
 
+# Path.inc's is_local()/is_remote() ends in a statvfs branch that reads
+# MNT_LOCAL and statvfs::f_flags -- neither exists on WASI's statvfs. z/OS
+# already takes the conservative "not local" answer; WASI joins it.
+MNT_OLD = """#elif defined(__MVS__)
+  // The file system can have an arbitrary structure on z/OS; must go with the
+  // conservative answer.
+  return false;"""
+MNT_NEW = """#elif defined(__MVS__) || defined(__wasi__)
+  // The file system can have an arbitrary structure on z/OS, and WASI has no
+  // mount table at all; both go with the conservative answer.
+  return false;"""
+
+# wasi-libc's struct rusage has no ru_maxrss, so Program.inc's peak-memory
+# accounting cannot read it. Leave PeakMemory at 0 instead.
+RSS_OLD = """#if !defined(__HAIKU__) && !defined(__MVS__)
+    PeakMemory = static_cast<uint64_t>(Info.ru_maxrss);
+#endif"""
+RSS_NEW = """#if !defined(__HAIKU__) && !defined(__MVS__) && !defined(__wasi__)
+    PeakMemory = static_cast<uint64_t>(Info.ru_maxrss);
+#endif"""
+
 PATCHES = [
     # wasi-libc ships <endian.h> (and <byteswap.h>), but the platform list in
     # ADT/bit.h does not know __wasi__, so it falls through to the generic
@@ -93,6 +114,9 @@ PATCHES = [
     ("llvm/lib/Support/CMakeLists.txt",
      "add_llvm_component_library(LLVMSupport",
      "add_llvm_component_library(LLVMSupport PARTIAL_SOURCES_INTENDED"),
+    # statvfs / rusage fields WASI's sysroot does not have.
+    ("llvm/lib/Support/Unix/Path.inc", MNT_OLD, MNT_NEW),
+    ("llvm/lib/Support/Unix/Program.inc", RSS_OLD, RSS_NEW),
     # LLVM classifies platforms as Windows / Unix / Generic and aborts on
     # anything else. A custom CMAKE_SYSTEM_NAME of "WASI" matches none, so the
     # cross configure dies at HandleLLVMOptions.cmake:235 with "Unable to
