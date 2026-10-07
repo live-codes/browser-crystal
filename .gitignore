@@ -2,3 +2,14 @@
 # per sample. Only public/crystal/*.wasm is needed at run time, and that is
 # committed so a clone runs without Docker.
 # build/objects/
+
+
+# libLLVM for wasm (build/llvm-wasm/): the source tarball, host tblgen and cross
+# build tree live under WORK/CACHE outside the repo; only the packaged result
+# would land in out/, and it is far too large to commit. Rebuild with
+# `npm run build:llvm-wasm` (Linux or WSL).
+build/llvm-wasm/out/
+
+# Python bytecode from patches/apply-patches.py
+__pycache__/
+*.pyc

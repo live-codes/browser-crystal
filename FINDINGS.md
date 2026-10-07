@@ -255,3 +255,29 @@ libgc.a
 The browser run above was driven with the `agent-browser` CLI against headless Chrome. The page
 exposes `document.documentElement.dataset` (`status`, `stage`, `runs`, `exitCode`, `ms`, `sample`)
 and its element ids as globals, so the checks can read state and click Run without string literals.
+
+## 9. Update — producing the libLLVM ourselves
+
+A later effort stopped waiting for the missing artifact and set out to build it: `libLLVM`
+compiled to `wasm32-wasip1`, the one thing Crystal's compiler has to link and that exists
+nowhere to download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its live
+status is [`build/llvm-wasm/STATUS.md`](build/llvm-wasm/STATUS.md). What it established:
+
+- **The artifact has a reproducible path.** LLVM **20.1.8** — the newest release Crystal 1.17
+  accepts — cross-compiled with **wasi-sdk 33** (clang 22 → wasm32-wasip1), WebAssembly backend
+  only, static, threads/EH/RTTI off; host `llvm-tblgen` built natively. The cross **configure
+  succeeds**, and `LLVMSupport` compiles apart from four files.
+- **It is a port, not a build.** LLVM’s Unix support layer assumes an operating system that WASI
+  preview 1 is not. Every edit is recorded in `build/llvm-wasm/patches/apply-patches.py`
+  (platform detection, `endian.h`, `sys/wait.h`, `alarm`, `getsid`, and excluding the two
+  unreferenced pure-OS files `CrashRecoveryContext.cpp` and `raw_socket_stream.cpp`).
+- **What is left is bounded and named.** The four remaining files are the process/signal core —
+  `Unix/Path.inc` (`pwd.h`), `Unix/Process.inc` (`rlimit`, `dup2`, `sigfillset`), `Unix/Program.inc`
+  (`fork`, `execv`, `wait4`, `setsid`), `Unix/Signals.inc` (`sigaction`, `dladdr`). None of those
+  symbols exist in wasi-libc, so they must be stubbed with the symbol present but failing;
+  `STATUS.md` carries the exact error list to resume from.
+- **The §2 conclusion stands, now sharper.** The blocker is neither licensing nor appetite: the
+  compiler’s front end is fine, but the LLVM the compiler links has to be ported to a platform
+  with no processes, signals or sockets. This is upstream-grade work — which is precisely why the
+  artifact does not exist to download.
+
