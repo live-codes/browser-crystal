@@ -30,15 +30,28 @@ amount of effort.
 
 ## Where it stands
 
-`cross-compile.sh` runs, and the compile gets as far as `compiler/crystal.cr`
-before stopping on:
+`cross-compile.sh` now gets through the compiler's own tooling and into the
+**standard library**, which is where the remaining work is:
 
 | Blocker | State |
 | --- | --- |
 | `-Di_know_what_im_doing` — the guard in `compiler/crystal.cr` | handled |
-| `require "markd"` from `tools/doc/generator.cr` and `tools/playground/server.cr` | **next step**: exclude those two commands for wasm, or shim `markd` |
-| The compiler's stdlib surface for wasm32 | not yet reached |
-| The runtime host (filesystem + lld) | not yet reached |
+| `require "markd"` (the `docs` command) | excluded via a new `without_docs` flag, mirroring Crystal's own `without_playground` |
+| `require "reply"` (interpreter/REPL) | excluded via Crystal's existing `-Dwithout_interpreter` |
+| libffi's ABI enum had no wasm32 entry | patched — i386-unix values, since wasm32 is ILP32 |
+| Compiler source loaded twice, from the patched copy and the installed dist | fixed: `CRYSTAL_PATH` pinned at the patched copy |
+| **`Signal` undefined in `process/status.cr`** | **next: the stdlib surface for wasm32** |
+| Runtime host (filesystem + lld) | not yet reached |
+
+Every edit is in `apply-patches.py` and idempotent, so a Crystal version bump
+fails loudly at the first drift rather than building something subtly wrong.
+
+The next class of work is the standard library. `crystal/event_loop/wasi.cr`
+exists — Crystal 1.17 has a WASI event loop — but parts of the stdlib still
+reference facilities WASI does not have: `Process::Status#exit_signal?` asks for
+`Signal`, and there will be more of this shape (signals, process, files). That is
+a Crystal-upstream port of the same kind as the libLLVM patches, and it is where
+the effort now sits.
 
 ## Reproduce
 
