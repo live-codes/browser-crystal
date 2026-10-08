@@ -17,6 +17,17 @@ that the missing piece is an upstream artifact, not an integration.
 
 <p align="center"><img src="docs/screenshot.png" alt="The page after running the first sample" width="1000"></p>
 
+## Where the work stands
+
+This page is still the original proof of concept: it *runs* precompiled Crystal and cannot
+compile what you type. The effort to change that is tracked separately —
+
+- **[HANDOFF.md](HANDOFF.md)** — current state, the environment, the exact next task, and
+  everything learned the hard way. **Start here if you are picking this up.**
+- [FINDINGS.md](FINDINGS.md) §9 — libLLVM built for `wasm32-wasip1`, verified.
+- [FINDINGS.md](FINDINGS.md) §10 — the Crystal compiler: it builds, links, runs and reads the
+  standard library; exceptions on wasm are the remaining blocker.
+
 ## Run it
 
 ```bash
