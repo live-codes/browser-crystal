@@ -163,6 +163,86 @@ WASI_OPEN_NEW = """  def open(filename : String, flags : Int32, permissions : Fi
     {fd, true}
   end"""
 
+# Crystal 1.17 deliberately does not implement exceptions on wasm32: raise()
+# calls `LibIntrinsics.debugtrap` (the `unreachable` seen at every run), and the
+# three runtime hooks print "EXITING: ..." and exit. But the machinery for the
+# Itanium landing-pad path is all present -- LLVM's wasm EH uses
+# WasmEHPrepare + `_Unwind_CallPersonality` + `__wasm_lpad_context`, and
+# libunwind's wasm port (Unwind-wasm.c) provides `_Unwind_RaiseException`
+# (a `wasm throw`), `_Unwind_GetIP`, `_Unwind_GetLanguageSpecificData` and
+# `_Unwind_SetGR`. So the wasm stubs are removed and wasm uses the same
+# implementations as every other platform.
+WASM_RAISE_STUBS_OLD = """{% elsif flag?(:wasm32) %}
+  # :nodoc:
+  fun __crystal_personality
+    Crystal::System.print_error "EXITING: __crystal_personality called"
+    LibC.exit(1)
+  end
+
+  # :nodoc:
+  @[Raises]
+  fun __crystal_raise(ex : Void*) : NoReturn
+    Crystal::System.print_error "EXITING: __crystal_raise called"
+    LibC.exit(1)
+  end
+
+  # :nodoc:
+  fun __crystal_get_exception(ex : Void*) : UInt64
+    Crystal::System.print_error "EXITING: __crystal_get_exception called"
+    LibC.exit(1)
+    0u64
+  end
+{% else %}"""
+
+WASM_RAISE_STUBS_NEW = """{% else %}"""
+
+WASM_RAISE_UNLESS_OLD = "{% unless flag?(:interpreted) || (flag?(:win32) && !flag?(:gnu)) || flag?(:wasm32) %}"
+WASM_RAISE_UNLESS_NEW = "{% unless flag?(:interpreted) || (flag?(:win32) && !flag?(:gnu)) %}"
+
+WASM_RAISE_DEF_OLD = """{% if flag?(:wasm32) %}
+  def raise(exception : Exception) : NoReturn
+    Crystal::System.print_error "EXITING: Attempting to raise:\\n%s\\n", exception.inspect_with_backtrace
+    LibIntrinsics.debugtrap
+    LibC.exit(1)
+  end
+{% else %}
+  # Raises the *exception*."""
+
+WASM_RAISE_DEF_NEW = """  # Raises the *exception*."""
+
+WASM_RAISE_DEF_END_OLD = """    exception.callstack ||= Exception::CallStack.new
+    raise_without_backtrace(exception)
+  end
+{% end %}"""
+
+WASM_RAISE_DEF_END_NEW = """    exception.callstack ||= Exception::CallStack.new
+    raise_without_backtrace(exception)
+  end"""
+
+# `exception/call_stack.cr` picks `call_stack/null` on wasm, which does not
+# require `exception/lib_unwind` -- so `LibUnwind` is not in scope once wasm uses
+# the real raise path. Require it directly.
+RAISE_REQUIRE_OLD = 'require "exception/call_stack"'
+RAISE_REQUIRE_NEW = """require "exception/call_stack"
+{% unless flag?(:interpreted) %}
+  require "exception/lib_unwind"
+{% end %}"""
+
+# `raise` calls `Exception::CallStack.print_backtrace`, which the interpreter and
+# libunwind call-stack implementations define but the null one (used on wasm)
+# does not. A wasm backtrace is empty anyway; this satisfies the interface.
+NULL_BACKTRACE_OLD = """  protected def self.decode_frame(pc)
+    nil
+  end"""
+
+NULL_BACKTRACE_NEW = """  # The other call-stack implementations provide this; raise needs it.
+  def self.print_backtrace : Nil
+  end
+
+  protected def self.decode_frame(pc)
+    nil
+  end"""
+
 PATCHES = [
     ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW),
     ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW),
@@ -171,6 +251,12 @@ PATCHES = [
     ("process/status.cr", STATUS_SIGNAL_OLD, STATUS_SIGNAL_NEW),
     ("compiler/crystal/config.cr", EXEC_PATH_OLD, EXEC_PATH_NEW),
     ("crystal/event_loop/wasi.cr", WASI_OPEN_OLD, WASI_OPEN_NEW),
+    ("raise.cr", WASM_RAISE_STUBS_OLD, WASM_RAISE_STUBS_NEW),
+    ("raise.cr", WASM_RAISE_UNLESS_OLD, WASM_RAISE_UNLESS_NEW),
+    ("raise.cr", WASM_RAISE_DEF_OLD, WASM_RAISE_DEF_NEW),
+    ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW),
+    ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW),
+    ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW),
 ]
 
 
@@ -186,14 +272,17 @@ def main() -> int:
     for rel, old, new in PATCHES:
         path = root / rel
         text = path.read_text()
-        if new in text:
+        # Check `old` first: a replacement can be a common string (one patch
+        # replaces a block with `{% else %}`), so `new in text` is not a usable
+        # "already applied" signal on its own.
+        if old in text:
+            path.write_text(text.replace(old, new, 1))
+            print(f"patched: {rel}")
+        elif new in text:
             print(f"already applied: {rel}")
-            continue
-        if old not in text:
+        else:
             print(f"PATCH TARGET CHANGED, cannot apply: {rel}", file=sys.stderr)
             return 1
-        path.write_text(text.replace(old, new, 1))
-        print(f"patched: {rel}")
     return 0
 
 

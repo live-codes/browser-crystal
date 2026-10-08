@@ -62,8 +62,10 @@ echo "=== crystal build compiler/crystal.cr --target wasm32-unknown-wasi ==="
   --mattr=+exception-handling \
   --cross-compile --target wasm32-unknown-wasi \
   -o "$OUT/crystal.o.wasm"
-echo "rc=$?"
+rc=$?
+echo "rc=$rc"
 ls -l "$OUT"/*.wasm 2>/dev/null
+exit $rc
 
 # Next blockers, in order:
 #   1. The compiler's own stdlib surface for wasm32 (File, Dir, Process, the
