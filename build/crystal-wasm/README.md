@@ -260,6 +260,30 @@ Both operands to ICmp instruction are not of the same type!
 
    It loads `llvm_context.int32` now, which is what `~match<…>` and the `icmp` want.
 
+With both fixed the module **verifies**, the compiler builds, and it links — and
+the exception **still escapes uncaught** (`Exception [WebAssembly.Exception] {}`),
+so the catch is not taking effect. Where to look next:
+
+- **Is the catch generated at all?** Dump the emitted wasm (or the pre-codegen IR)
+  and check whether the function containing the rescue has a `try`/`catch` and
+  whether the landing-pad block calls `_Unwind_CallPersonality`. If the pad is
+  still lowered as a cleanup, the clause is not reaching it.
+- **Does the rescue match?** If the pad *is* entered, `match_any_type_id` decides
+  from the type id read at the exception pointer; if that value is wrong the rescue
+  falls through and Crystal re-raises — which also escapes. Worth checking against
+  a known type id.
+- **The `_Unwind_SetIP` mismatch below** is unresolved and may matter: Crystal's
+  `LibUnwind` bindings assume the Itanium signatures, while libunwind's wasm port
+  returns `void` from `_Unwind_SetIP`. Harmless if Crystal's personality is never
+  called (which is the case on wasm), but it means the bindings do not match the
+  library and should be reconciled.
+
+```
+wasm-ld: warning: function signature mismatch: _Unwind_SetIP
+>>> defined as (i32, i32) -> i32 in crystal.o.wasm
+>>> defined as (i32, i32) -> void in .../eh/libunwind.a(Unwind-wasm.c.o)
+```
+
 Everything else is ready: the bootstrap builds, the cross-compile runs with the
 patched compiler, and the link resolves (only a benign `_Unwind_SetIP` signature
 warning, from libunwind's wasm `_Unwind_SetIP` returning void where Crystal's
