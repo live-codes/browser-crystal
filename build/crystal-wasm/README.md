@@ -278,6 +278,35 @@ so the catch is not taking effect. Where to look next:
   called (which is the case on wasm), but it means the bindings do not match the
   library and should be reconciled.
 
+A minimal repro made this much faster to work on — `begin / raise / rescue` in a
+three-line program compiles and links in seconds (`sh_exc.sh` upstream of this
+note), instead of the 25-minute compiler cycle. Disassembling it settled the
+question the compiler could not: the module contained a **`throw 0` and no
+`try`/`catch` at all**, so the landing pad was simply dropped.
+
+**That is because wasm EH in LLVM uses the *funclet* representation** —
+`catchswitch`/`catchpad`, lowered to `catch __cpp_exception`
+(`WebAssemblyISelDAGToDAG.cpp`) — which is exactly Crystal's **msvc** path, not its
+landing-pad path. The patch therefore gives the wasm target the msvc branch
+(`msvc = @program.has_flag?("msvc")` is a runtime flag check, so a wasm target can
+join it).
+
+That gets further — it compiles to `codegen_re_raise` and stops on a
+`NilAssertionError`:
+
+```
+Nil assertion failed (NilAssertionError)
+  from src/compiler/crystal/codegen/exception.cr:304 in 'codegen_re_raise'
+```
+
+`codegen_re_raise` branches on `@program.has_flag?("msvc")` while its *caller* now
+branches on `funclet_eh`, so on wasm the caller takes the funclet path (where
+`unwind_ex_obj` is never assigned) and the callee takes the non-funclet path and
+asserts on it. The funclet ensure-catchpad also never captures the exception, and
+the msvc re-raise is `_CxxThrowException` — Windows-only. So finishing this needs
+the wasm funclet path to capture the caught exception and re-raise it through
+`__crystal_raise`, rather than Crystal's Windows re-raise.
+
 ```
 wasm-ld: warning: function signature mismatch: _Unwind_SetIP
 >>> defined as (i32, i32) -> i32 in crystal.o.wasm

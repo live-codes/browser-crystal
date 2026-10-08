@@ -323,6 +323,26 @@ CODEGEN_ENSURE_NEW = """          lp_ret_type = llvm_typer.landing_pad_type
           lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
           unwind_ex_obj = extract_value lp, 0"""
 
+# The msvc/funclet branch selector. `msvc` is a runtime program flag, so a wasm
+# target can join it rather than being handled with compile-time macros.
+MSVC_BRANCH_OLD = '    msvc = @program.has_flag?("msvc")'
+MSVC_BRANCH_NEW = """    msvc = @program.has_flag?("msvc")
+    # WebAssembly's exception handling in LLVM uses the funclet representation
+    # (catchswitch/catchpad, lowered to `catch __cpp_exception`), which is the
+    # same shape as the msvc path -- so a wasm target takes it.
+    wasm_target = @program.target_machine.triple.starts_with?("wasm32")
+    funclet_eh = msvc || wasm_target"""
+
+MSVC_IF_RESCUE_OLD = """      if msvc
+        # Windows structured exception handling must enter a catch_switch instruction"""
+MSVC_IF_RESCUE_NEW = """      if funclet_eh
+        # Windows structured exception handling must enter a catch_switch instruction"""
+
+MSVC_IF_ENSURE_OLD = """        if msvc
+          rescue_ensure_body = new_block "rescue_ensure_body\""""
+MSVC_IF_ENSURE_NEW = """        if funclet_eh
+          rescue_ensure_body = new_block "rescue_ensure_body\""""
+
 PATCHES = [
     ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW),
     ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW),
@@ -337,8 +357,13 @@ PATCHES = [
     ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW),
     ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW),
     ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW),
-    ("compiler/crystal/codegen/exception.cr", CODEGEN_RESCUE_OLD, CODEGEN_RESCUE_NEW),
-    ("compiler/crystal/codegen/exception.cr", CODEGEN_ENSURE_OLD, CODEGEN_ENSURE_NEW),
+    # wasm EH in LLVM uses the funclet representation -- `catchswitch`/`catchpad`,
+    # lowered to `catch __cpp_exception` (WebAssemblyISelDAGToDAG.cpp) -- which is
+    # exactly Crystal's msvc path. Its landingpad path is dropped on wasm: the
+    # emitted module had a `throw` and no `try` at all, so the exception escaped.
+    ("compiler/crystal/codegen/exception.cr", MSVC_BRANCH_OLD, MSVC_BRANCH_NEW),
+    ("compiler/crystal/codegen/exception.cr", MSVC_IF_RESCUE_OLD, MSVC_IF_RESCUE_NEW),
+    ("compiler/crystal/codegen/exception.cr", MSVC_IF_ENSURE_OLD, MSVC_IF_ENSURE_NEW),
 ]
 
 
