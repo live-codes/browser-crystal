@@ -177,6 +177,53 @@ before it can cross-compile the wasm compiler.
 compiler running, reading sources, parsing, semantic analysis, and now a real
 wasm throw.
 
+## The codegen patch, and why it needs a bootstrap
+
+`apply-patches.py` gives the wasm landing pads a catch-all clause and reads the
+type id off the exception object instead of the pad's selector slot — the shape
+Crystal's own **msvc** path already uses:
+
+```crystal
+{% if flag?(:wasm32) %}
+  lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [LLVM::Value.null]
+  unwind_ex_obj = extract_value lp, 0
+  caught_exception_ptr = call get_exception_fun, [get_exception_arg]
+  caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
+  exception_type_id = load llvm_typer.type_id_pointer, caught_exception
+{% else %}
+  lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [] of LLVM::Value
+  exception_type_id = extract_value lp, 1     # our personality fills this
+{% end %}
+```
+
+`LLVM::Value.null` as the only clause is LLVM's catch-all (`LLVMAddClause` with a
+null value), which is what makes libc++abi's personality enter the pad. The
+exception object begins with its type id, so `load` gives the same value Crystal's
+personality used to write into the pad.
+
+**This is the point where the fix changes the compiler, not the program.** The
+landing pads above are emitted by *whichever* compiler compiles the code, so
+patching the source handed to the distribution's compiler is not enough — its
+codegen is fixed. The compiler has to be rebuilt from the patched source and then
+used. `bootstrap.sh` does that:
+
+```bash
+# $OUT/src is the patched source; builds a native compiler from it
+OUT=/root/bc-crystal bash build/crystal-wasm/bootstrap.sh   # → $OUT/bin/crystal-native
+# then cross-compile with CRYSTAL=$OUT/bin/crystal-native
+CRYSTAL=/root/bc-crystal/bin/crystal-native bash build/crystal-wasm/cross-compile.sh
+```
+
+The bootstrap runs natively, so the wasm LLVM pinning (`LLVM_CONFIG`,
+`LLVM_VERSION`, …) is unset for it and the distribution's own `llvm-config` is
+used. Two things it needs, which the first attempt ran into:
+
+- a native LLVM that Crystal 1.17 supports (8–20). `find-llvm-config.sh` takes the
+  first on `PATH`, which here was `llvm-config-21`, so `bootstrap.sh` picks a
+  supported one explicitly.
+- the native development libraries: `apt-get install libpcre3-dev libgc-dev`
+  (the first attempt failed at `cannot find -lpcre`).
+
 ## Compiling on the page — what is still needed
 
 | Piece | State |

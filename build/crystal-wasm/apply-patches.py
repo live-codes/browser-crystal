@@ -243,6 +243,81 @@ NULL_BACKTRACE_NEW = """  # The other call-stack implementations provide this; r
     nil
   end"""
 
+# The rescue landing pad, for the non-MSVC (Itanium) path. Two things are wrong
+# for wasm:
+#
+#   * it has **no clauses**, and wasm's personality (libc++abi's
+#     `__gxx_personality_wasm0`, which WasmEHPrepare hardcodes through
+#     `_Unwind_CallPersonality`) only enters the pad when a clause matches --
+#     otherwise it rethrows and the exception escapes the module;
+#   * its second slot is read as the exception's type id, but that slot is
+#     filled by *Crystal's* personality, which wasm never calls; libc++abi puts
+#     a clause index there instead.
+#
+# So on wasm the pad declares a catch-all (Crystal wants every exception and
+# dispatches itself) and the type id is read off the exception object, which
+# begins with it -- the same thing the msvc path above already does.
+CODEGEN_RESCUE_OLD = """      else
+        # Unwind exception handling code - used on non-MSVC platforms (essentially the Itanium
+        # C++ ABI) - is a lot simpler.
+        # First we generate the landing pad instruction, this returns a tuple of the libunwind
+        # exception object and the type ID of the exception. This tuple is set up in the crystal
+        # personality function in raise.cr
+        lp_ret_type = llvm_typer.landing_pad_type
+        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [] of LLVM::Value
+        unwind_ex_obj = extract_value lp, 0
+        exception_type_id = extract_value lp, 1
+
+        # We call __crystal_get_exception to get the actual crystal `Exception` object.
+        get_exception_fun = main_fun(GET_EXCEPTION_NAME)
+        get_exception_arg_type = get_exception_fun.type.params_types.first # Void* or LibUnwind::Exception*
+        get_exception_arg = pointer_cast(unwind_ex_obj, get_exception_arg_type)
+
+        set_current_debug_location node if @debug.line_numbers?
+        caught_exception_ptr = call get_exception_fun, [get_exception_arg]
+        caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
+      end"""
+
+CODEGEN_RESCUE_NEW = """      else
+        # Unwind exception handling code - used on non-MSVC platforms (essentially the Itanium
+        # C++ ABI) - is a lot simpler.
+        # First we generate the landing pad instruction, this returns a tuple of the libunwind
+        # exception object and the type ID of the exception. This tuple is set up in the crystal
+        # personality function in raise.cr.
+        #
+        # On wasm the personality is libc++abi's, not ours: WasmEHPrepare hardcodes
+        # `_Unwind_CallPersonality`, which calls `__gxx_personality_wasm0`. That one only
+        # enters the pad when a clause matches -- otherwise it rethrows and the exception
+        # escapes the module -- and it puts a clause index in the selector slot, not a type
+        # id. So wasm declares a catch-all (Crystal wants every exception and dispatches
+        # itself) and reads the type id off the exception object, which begins with it.
+        #
+        # The branches below are expression-position macros on purpose: a declaration inside
+        # a statement-position `{% if %}` is not visible after `{% end %}`.
+        lp_ret_type = llvm_typer.landing_pad_type
+        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, {% if flag?(:wasm32) %} [LLVM::Value.null] {% else %} [] of LLVM::Value {% end %}
+        unwind_ex_obj = extract_value lp, 0
+
+        # We call __crystal_get_exception to get the actual crystal `Exception` object.
+        get_exception_fun = main_fun(GET_EXCEPTION_NAME)
+        get_exception_arg_type = get_exception_fun.type.params_types.first # Void* or LibUnwind::Exception*
+        get_exception_arg = pointer_cast(unwind_ex_obj, get_exception_arg_type)
+
+        set_current_debug_location node if @debug.line_numbers?
+        caught_exception_ptr = call get_exception_fun, [get_exception_arg]
+        caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
+        exception_type_id = {% if flag?(:wasm32) %} load llvm_typer.type_id_pointer, caught_exception {% else %} extract_value lp, 1 {% end %}
+      end"""
+
+CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
+          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [] of LLVM::Value
+          unwind_ex_obj = extract_value lp, 0"""
+
+CODEGEN_ENSURE_NEW = """          lp_ret_type = llvm_typer.landing_pad_type
+          # As in the rescue pad: wasm needs a clause or it rethrows.
+          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, {% if flag?(:wasm32) %} [LLVM::Value.null] {% else %} [] of LLVM::Value {% end %}
+          unwind_ex_obj = extract_value lp, 0"""
+
 PATCHES = [
     ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW),
     ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW),
@@ -257,6 +332,8 @@ PATCHES = [
     ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW),
     ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW),
     ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW),
+    ("compiler/crystal/codegen/exception.cr", CODEGEN_RESCUE_OLD, CODEGEN_RESCUE_NEW),
+    ("compiler/crystal/codegen/exception.cr", CODEGEN_ENSURE_OLD, CODEGEN_ENSURE_NEW),
 ]
 
 

@@ -278,5 +278,80 @@ download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its status 
   not need them to.
 - **§2 is revised, not overturned.** Crystal's *own* compiler still cannot run in a browser
   without further work — but the reason it could not is now gone. The remaining task is the
-  Crystal compiler port on top of a linkable wasm libLLVM, not the absence of one.
+  Crystal compiler port on top of a linkable wasm libLLVM, not the absence of one. §10 takes
+  that further.
+
+## 10. The Crystal compiler, in wasm
+
+With libLLVM built (§9), the thing it was built for was attempted: the Crystal compiler
+itself, compiled to `wasm32-wasip1`. The pipeline is in
+[`build/crystal-wasm/`](build/crystal-wasm/); the detail is in its
+[`README.md`](build/crystal-wasm/README.md).
+
+**What works.** Using Crystal 1.17.0's own source and the wasm libLLVM, the compiler builds
+(60 MB wasm object), links, and **runs** in a wasm engine:
+
+```
+$ node run-wasi.mjs crystal.wasm --version
+Crystal 1.17.0
+LLVM: 20.1.8
+Default target: wasm32-unknown-wasip1
+```
+
+That LLVM is this repo's, not the host's 18. Run against a real filesystem (clang-wasm's
+toolchain, via `try-compile.mjs`), it then reads the standard library, parses it, and
+reaches semantic analysis and macro interpretation.
+
+**What it took**, all recorded as idempotent patches in `apply-patches.py`:
+
+| Blocker | Fix |
+| --- | --- |
+| `crystal docs` needs the `markd` shard | excluded with a new `without_docs` flag (mirroring Crystal's `without_playground`) |
+| the interpreter/REPL needs `reply` | Crystal's existing `-Dwithout_interpreter` |
+| libffi's ABI enum had no wasm32 entry | i386-unix values (wasm32 is ILP32) |
+| the compiler's source loaded twice | `CRYSTAL_PATH` pinned at the patched copy — it refers to itself by `CRYSTAL_PATH` |
+| `Signal` undefined in `process/status.cr` | the stdlib guarded the method *bodies* for `!wasm32` but not the return-type annotation |
+| `Process.executable_path` block type in `config.cr` | made explicit for wasm |
+| `crt1` `_start` clash | link with `-nostartfiles` — Crystal defines its own |
+| `dlopen`/`dlclose`/`dlsym`/`dlerror` | wasi-libc's `libdl.a` is an empty stub; stubbed in the libLLVM compat layer |
+| `Crystal::EventLoop::Wasi#open` | was a `NotImplementedError`; implemented over `LibC.open` |
+| 64 KiB default stack | semantic analysis overflowed it; `-z stack-size=33554432` |
+| PCRE for `Regex` | `build-pcre2.sh` cross-builds PCRE2; Crystal compiled with `-Duse_pcre2` |
+
+**What blocks it: exceptions on wasm, in three layers.**
+
+1. *The codegen half already works.* The WebAssembly target machine **forces**
+   `ExceptionModel = Wasm` itself (`WebAssemblyTargetMachine.cpp:430`), so the `TargetOptions`
+   the C API cannot set are not needed; Crystal exposes `--mattr`, so `+exception-handling` can
+   be asked for without touching codegen; and wasi-sdk ships the runtime in its `eh` sysroot
+   (`-fwasm-exceptions`, `-lunwind`).
+2. *The runtime was stubbed.* `src/raise.cr` had four deliberate stubs for `wasm32` —
+   `__crystal_personality`, `__crystal_raise`, `__crystal_get_exception` printed
+   `"EXITING: …"` and exited, and `raise` called `LibIntrinsics.debugtrap` (the `unreachable`
+   seen for several rounds). Removing them, requiring `exception/lib_unwind` explicitly (wasm's
+   `call_stack/null` does not pull it in) and adding the missing `CallStack.print_backtrace`
+   made **`raise` a real wasm `throw`**.
+3. *The landing pads are the remaining gap.* Crystal's pads carry **no clauses** and rely on
+   *its* personality to write the exception's type id into the pad's second slot. On wasm,
+   `_Unwind_CallPersonality` calls **libc++abi's** personality (`Unwind-wasm.c` hardcodes it),
+   which finds no clause, sets selector 0, and rethrows — so the exception escapes the module
+   (`Exception [WebAssembly.Exception] {}`). Crystal's **msvc** path already does the right
+   thing (read the exception, compute the type id at runtime), so the fix is to give wasm that
+   shape: a catch-all clause plus runtime type dispatch.
+
+**The consequence that shapes the work:** that last fix is in
+`compiler/crystal/codegen/exception.cr`, so it needs a **patched compiler binary** — landing
+pads come from whichever compiler compiles the code, so the host compiler must be built from
+source with the patch (`bootstrap.sh`) and then used to cross-compile.
+
+**Still to do after that:** the `lld` step (linking the object the compiler emits, for which
+clang-wasm's `lld.wasm` is available), shipping the stdlib and a wasm sysroot as assets, and
+the page itself — an editable editor that compiles, links and runs.
+
+**The honest headline.** The question this document opened with — can Crystal's compiler run
+in a browser — is now answered in the affirmative for everything except exception handling,
+which is a genuine, precisely-located gap in Crystal's own codegen rather than a missing
+upstream artifact. libLLVM-for-wasm exists and is verified; the compiler runs and reads the
+standard library; what stands between that and an editable playground is one codegen patch
+and the linking/UI work above it.
 
