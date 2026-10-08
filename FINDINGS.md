@@ -318,40 +318,48 @@ reaches semantic analysis and macro interpretation.
 | 64 KiB default stack | semantic analysis overflowed it; `-z stack-size=33554432` |
 | PCRE for `Regex` | `build-pcre2.sh` cross-builds PCRE2; Crystal compiled with `-Duse_pcre2` |
 
-**What blocks it: exceptions on wasm, in three layers.**
+**Exception handling on wasm — solved, in three parts.** It looked like a landing-pad problem
+and was not.
 
-1. *The codegen half already works.* The WebAssembly target machine **forces**
-   `ExceptionModel = Wasm` itself (`WebAssemblyTargetMachine.cpp:430`), so the `TargetOptions`
-   the C API cannot set are not needed; Crystal exposes `--mattr`, so `+exception-handling` can
-   be asked for without touching codegen; and wasi-sdk ships the runtime in its `eh` sysroot
-   (`-fwasm-exceptions`, `-lunwind`).
-2. *The runtime was stubbed.* `src/raise.cr` had four deliberate stubs for `wasm32` —
-   `__crystal_personality`, `__crystal_raise`, `__crystal_get_exception` printed
-   `"EXITING: …"` and exited, and `raise` called `LibIntrinsics.debugtrap` (the `unreachable`
-   seen for several rounds). Removing them, requiring `exception/lib_unwind` explicitly (wasm's
-   `call_stack/null` does not pull it in) and adding the missing `CallStack.print_backtrace`
-   made **`raise` a real wasm `throw`**.
-3. *The landing pads are the remaining gap.* Crystal's pads carry **no clauses** and rely on
-   *its* personality to write the exception's type id into the pad's second slot. On wasm,
-   `_Unwind_CallPersonality` calls **libc++abi's** personality (`Unwind-wasm.c` hardcodes it),
-   which finds no clause, sets selector 0, and rethrows — so the exception escapes the module
-   (`Exception [WebAssembly.Exception] {}`). Crystal's **msvc** path already does the right
-   thing (read the exception, compute the type id at runtime), so the fix is to give wasm that
-   shape: a catch-all clause plus runtime type dispatch.
+1. *The runtime was stubbed — and is not any more.* `src/raise.cr` had four deliberate stubs for
+   `wasm32` (`__crystal_personality`, `__crystal_raise`, `__crystal_get_exception` printed
+   `"EXITING: …"` and exited, and `raise` called `LibIntrinsics.debugtrap`). Removing them,
+   requiring `exception/lib_unwind` explicitly (wasm's `call_stack/null` does not pull it in) and
+   adding the missing `CallStack.print_backtrace` made **`raise` a real wasm `throw`**.
+2. *The catch is funclet IR, not a landing pad.* LLVM's wasm backend lowers the Windows-style
+   funclet IR (`catchswitch`/`catchpad`/`catchret`, `llvm.wasm.rethrow`), so a wasm target takes
+   Crystal's **msvc** path — but with a wasm-specific catchpad: one catch-all operand
+   (`[ptr null]`), the exception fetched with `llvm.wasm.get.exception(token)`, and a
+   `__gxx_wasm_personality_v0` personality. Crystal's Itanium `landingpad` is never lowered on
+   wasm.
+3. *The real blocker: the exception model is an LLVM `cl::opt`.* `WebAssemblyMCAsmInfo` selects
+   `ExceptionHandling::Wasm` only when **`-wasm-enable-eh`** is set; `--mattr=+exception-handling`
+   only toggles the subtarget feature. Unset, `TargetPassConfig` runs the `lowerinvoke` pass,
+   which rewrites `invoke` → `call` and deletes the `catchswitch`/`catchpad` — the exception then
+   escapes however correct the funclet IR is, and the disassembly shows a bare `throw` and no
+   `try` (the `throw` being libunwind's, which is why it read as a landing-pad bug). clang's
+   `-fwasm-exceptions` sets that option via `TargetOptions`, which the LLVM C API does not expose,
+   so the compiler now sets it itself: `LLVM.parse_command_line_options(["crystal",
+   "-wasm-enable-eh"])` in `codegen/target.cr`, before the target machine is built, plus
+   `+exception-handling` in the features.
 
-**The consequence that shapes the work:** that last fix is in
-`compiler/crystal/codegen/exception.cr`, so it needs a **patched compiler binary** — landing
-pads come from whichever compiler compiles the code, so the host compiler must be built from
-source with the patch (`bootstrap.sh`) and then used to cross-compile.
+**The consequence that shapes the work:** the catchpad/personality come from whichever compiler
+compiles the code, so the fix required a **patched compiler binary** — the host compiler rebuilt
+from source (`bootstrap.sh`) and then used to cross-compile.
 
-**Still to do after that:** the `lld` step (linking the object the compiler emits, for which
-clang-wasm's `lld.wasm` is available), shipping the stdlib and a wasm sysroot as assets, and
-the page itself — an editable editor that compiles, links and runs.
+**It works.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints `caught: boom` / `done`, and the
+wasm compiler compiles a program whose object links and runs (`hello from the wasm Crystal
+compiler`). The full detail, including the two-stacks trap (Crystal's linear stack vs V8's
+*native* stack, and why `-z stack-size` cannot fix a `RangeError`), is in
+[`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**The honest headline.** The question this document opened with — can Crystal's compiler run
-in a browser — is now answered in the affirmative for everything except exception handling,
-which is a genuine, precisely-located gap in Crystal's own codegen rather than a missing
-upstream artifact. libLLVM-for-wasm exists and is verified; the compiler runs and reads the
-standard library; what stands between that and an editable playground is one codegen patch
-and the linking/UI work above it.
+**Still to do:** the `lld` step *in the browser* (the harness already links with wasi-sdk's
+`wasm-ld`; clang-wasm's `lld.wasm` is available), shipping the stdlib and a wasm sysroot as
+assets, and the page itself — an editable editor that compiles, links and runs.
+
+**The honest headline.** The question this document opened with — can Crystal's compiler run in
+a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the
+compiler runs, reads the standard library, catches exceptions, and compiles a program to a wasm
+object that links and runs. What stands between that and an editable playground is the browser
+linking/UI work — not a gap in Crystal's own codegen.
 

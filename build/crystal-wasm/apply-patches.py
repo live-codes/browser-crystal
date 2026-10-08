@@ -18,6 +18,13 @@ Two of the compiler's commands cannot exist in a wasm build:
 Each edit is an idempotent literal replacement; the script refuses to continue if
 a target does not contain the expected text, so a Crystal version bump fails
 loudly instead of silently skipping a fix.
+
+Idempotency note: several patches only *insert* text, so their replacement
+contains the original verbatim (`new ⊇ old`). For those, `new in text` is not a
+usable "already applied" signal -- the old text survives inside the new one and
+the patch would apply again on every run. They carry an explicit `marker`: a
+string that appears only in the patched file. Patches whose new text cannot be a
+substring of the old one need no marker.
 """
 import pathlib
 import sys
@@ -166,12 +173,11 @@ WASI_OPEN_NEW = """  def open(filename : String, flags : Int32, permissions : Fi
 # Crystal 1.17 deliberately does not implement exceptions on wasm32: raise()
 # calls `LibIntrinsics.debugtrap` (the `unreachable` seen at every run), and the
 # three runtime hooks print "EXITING: ..." and exit. But the machinery for the
-# Itanium landing-pad path is all present -- LLVM's wasm EH uses
-# WasmEHPrepare + `_Unwind_CallPersonality` + `__wasm_lpad_context`, and
-# libunwind's wasm port (Unwind-wasm.c) provides `_Unwind_RaiseException`
-# (a `wasm throw`), `_Unwind_GetIP`, `_Unwind_GetLanguageSpecificData` and
-# `_Unwind_SetGR`. So the wasm stubs are removed and wasm uses the same
-# implementations as every other platform.
+# funclet path is all present -- LLVM's wasm EH uses the Windows-style funclet
+# IR (catchswitch/catchpad), and libunwind's wasm port (Unwind-wasm.c) provides
+# `_Unwind_RaiseException` (a `wasm throw`), `_Unwind_GetIP`,
+# `_Unwind_GetLanguageSpecificData` and `_Unwind_SetGR`. So the wasm stubs are
+# removed and wasm uses the same implementations as every other platform.
 WASM_RAISE_STUBS_OLD = """{% elsif flag?(:wasm32) %}
   # :nodoc:
   fun __crystal_personality
@@ -243,88 +249,15 @@ NULL_BACKTRACE_NEW = """  # The other call-stack implementations provide this; r
     nil
   end"""
 
-# The rescue landing pad, for the non-MSVC (Itanium) path. Two things are wrong
-# for wasm:
-#
-#   * it has **no clauses**, and wasm's personality (libc++abi's
-#     `__gxx_personality_wasm0`, which WasmEHPrepare hardcodes through
-#     `_Unwind_CallPersonality`) only enters the pad when a clause matches --
-#     otherwise it rethrows and the exception escapes the module;
-#   * its second slot is read as the exception's type id, but that slot is
-#     filled by *Crystal's* personality, which wasm never calls; libc++abi puts
-#     a clause index there instead.
-#
-# So on wasm the pad declares a catch-all (Crystal wants every exception and
-# dispatches itself) and the type id is read off the exception object, which
-# begins with it -- the same thing the msvc path above already does.
-CODEGEN_RESCUE_OLD = """      else
-        # Unwind exception handling code - used on non-MSVC platforms (essentially the Itanium
-        # C++ ABI) - is a lot simpler.
-        # First we generate the landing pad instruction, this returns a tuple of the libunwind
-        # exception object and the type ID of the exception. This tuple is set up in the crystal
-        # personality function in raise.cr
-        lp_ret_type = llvm_typer.landing_pad_type
-        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [] of LLVM::Value
-        unwind_ex_obj = extract_value lp, 0
-        exception_type_id = extract_value lp, 1
-
-        # We call __crystal_get_exception to get the actual crystal `Exception` object.
-        get_exception_fun = main_fun(GET_EXCEPTION_NAME)
-        get_exception_arg_type = get_exception_fun.type.params_types.first # Void* or LibUnwind::Exception*
-        get_exception_arg = pointer_cast(unwind_ex_obj, get_exception_arg_type)
-
-        set_current_debug_location node if @debug.line_numbers?
-        caught_exception_ptr = call get_exception_fun, [get_exception_arg]
-        caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
-      end"""
-
-CODEGEN_RESCUE_NEW = """      else
-        # Unwind exception handling code - used on non-MSVC platforms (essentially the Itanium
-        # C++ ABI) - is a lot simpler.
-        # First we generate the landing pad instruction, this returns a tuple of the libunwind
-        # exception object and the type ID of the exception. This tuple is set up in the crystal
-        # personality function in raise.cr.
-        #
-        # On wasm the personality is libc++abi's, not ours: WasmEHPrepare hardcodes
-        # `_Unwind_CallPersonality`, which calls `__gxx_personality_wasm0`. That one only enters
-        # the pad when a clause matches -- otherwise it rethrows and the exception escapes the
-        # module -- and it puts a clause index in the selector slot, not a type id. So a wasm
-        # target declares a catch-all (Crystal wants every exception and dispatches itself) and
-        # reads the type id off the exception object, which begins with it.
-        #
-        # This is a *runtime* check on the target, not `flag?(:wasm32)`: the latter is evaluated
-        # when the compiler is built, so a natively-built compiler would take the else branch.
-        wasm_target = @program.target_machine.triple.starts_with?("wasm32")
-        lp_ret_type = llvm_typer.landing_pad_type
-        # A catch-all clause is a null i8* constant, as LLVM's own IR spells it;
-        # passing a null ValueRef instead leaves the pad invalid.
-        clauses = wasm_target ? [llvm_context.int8.pointer.null] : [] of LLVM::Value
-        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
-        unwind_ex_obj = extract_value lp, 0
-
-        # We call __crystal_get_exception to get the actual crystal `Exception` object.
-        get_exception_fun = main_fun(GET_EXCEPTION_NAME)
-        get_exception_arg_type = get_exception_fun.type.params_types.first # Void* or LibUnwind::Exception*
-        get_exception_arg = pointer_cast(unwind_ex_obj, get_exception_arg_type)
-
-        set_current_debug_location node if @debug.line_numbers?
-        caught_exception_ptr = call get_exception_fun, [get_exception_arg]
-        caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
-        exception_type_id = wasm_target ? load(llvm_context.int32, caught_exception) : extract_value(lp, 1)
-      end"""
-
-CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
-          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, [] of LLVM::Value
-          unwind_ex_obj = extract_value lp, 0"""
-
-CODEGEN_ENSURE_NEW = """          lp_ret_type = llvm_typer.landing_pad_type
-          # As in the rescue pad: a wasm target needs a clause or it rethrows.
-          clauses = @program.target_machine.triple.starts_with?("wasm32") ? [llvm_context.int8.pointer.null] : [] of LLVM::Value
-          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
-          unwind_ex_obj = extract_value lp, 0"""
-
-# The msvc/funclet branch selector. `msvc` is a runtime program flag, so a wasm
-# target can join it rather than being handled with compile-time macros.
+# WebAssembly's exception handling in LLVM uses the Windows-style *funclet*
+# representation -- `catchswitch`/`catchpad`, lowered by the wasm backend to
+# `try`/`catch __cpp_exception` (WebAssemblyISelDAGToDAG.cpp) -- not the Itanium
+# landing pad Crystal emits by default. `WinEHPrepare` and `WasmEHPrepare` run
+# the module for `ExceptionHandling::Wasm`, so a wasm target must take Crystal's
+# msvc code path. `msvc` is a *runtime* program flag, so it is extended here with
+# a runtime target check rather than `{% if flag?(:wasm32) %}` (which is
+# evaluated when the *compiler* is built -- a natively-built bootstrap compiler
+# would take the else branch).
 MSVC_BRANCH_OLD = '    msvc = @program.has_flag?("msvc")'
 MSVC_BRANCH_NEW = """    msvc = @program.has_flag?("msvc")
     # WebAssembly's exception handling in LLVM uses the funclet representation
@@ -333,37 +266,287 @@ MSVC_BRANCH_NEW = """    msvc = @program.has_flag?("msvc")
     wasm_target = @program.target_machine.triple.starts_with?("wasm32")
     funclet_eh = msvc || wasm_target"""
 
-MSVC_IF_RESCUE_OLD = """      if msvc
-        # Windows structured exception handling must enter a catch_switch instruction"""
-MSVC_IF_RESCUE_NEW = """      if funclet_eh
-        # Windows structured exception handling must enter a catch_switch instruction"""
+# The personality function is per-function. WasmEHPrepare requires a *scoped*
+# personality on every function that owns a catchpad; for wasm that is libc++abi's
+# __gxx_wasm_personality_v0, where msvc uses __CxxFrameHandler3.
+PERSONALITY_SET_OLD = "    context.fun.personality_function = windows_personality_fun.func if msvc"
+PERSONALITY_SET_NEW = """    if msvc
+      context.fun.personality_function = windows_personality_fun.func
+    elsif wasm_target
+      context.fun.personality_function = wasm_personality_fun.func
+    end"""
 
-MSVC_IF_ENSURE_OLD = """        if msvc
-          rescue_ensure_body = new_block "rescue_ensure_body\""""
-MSVC_IF_ENSURE_NEW = """        if funclet_eh
-          rescue_ensure_body = new_block "rescue_ensure_body\""""
+# The rescue catchpad. wasm uses the same funclet IR as msvc, but the catchpad
+# *shape* differs: wasm wants a single catch-all operand (`ptr null`) and delivers
+# the caught exception through llvm.wasm.get.exception(token), which WasmEHPrepare
+# rewrites to the wasm `catch` instruction. There is no catch-object slot, so the
+# exception is unwrapped with __crystal_get_exception exactly as the Itanium
+# landing-pad path does. (r-string: the old text contains a literal \n.)
+CODEGEN_RESCUE_OLD = r"""      if msvc
+        # Windows structured exception handling must enter a catch_switch instruction
+        # which decides which catch body block to enter. Crystal only ever generates one catch body
+        # which is used for all exceptions. For more information on how structured exception handling works in LLVM,
+        # see https://llvm.org/docs/ExceptionHandling.html#exception-handling-using-the-windows-runtime
+        catch_body = new_block "catch_body"
+        catch_switch = builder.catch_switch(@catch_pad || LLVM::Value.null, @rescue_block || LLVM::BasicBlock.null, 1)
+        builder.add_handler catch_switch, catch_body
 
+        # We're now generating the catch body, which must begin with a catchpad instruction
+        position_at_end catch_body
+
+        # Allocate space for the caught exception
+        exception_type = @program.exception.virtual_type
+        exception_llvm_type = llvm_type(exception_type)
+        caught_exception_ptr = alloca exception_llvm_type
+
+        # The catchpad instruction dictates which types of exceptions this block handles,
+        # we want all of them, so we rescue all void* by passing the void_ptr_type_descriptor.
+        # We also need to record the catch pad instruction in `@catch_pad` to refer to the parent catch
+        # pad in nested rescue blocks, and to generate funclet information for function calls which are
+        # "inside" this catchpad. More information on this is available in the link above.
+        @catch_pad = builder.catch_pad catch_switch, [void_ptr_type_descriptor, int32(0), caught_exception_ptr]
+
+        # builder.printf("catchpad entered #{node.location}\n", catch_pad: @catch_pad)
+
+        caught_exception = load exception_llvm_type, caught_exception_ptr
+        exception_type_id = type_id(caught_exception, exception_type)
+      else"""
+
+CODEGEN_RESCUE_NEW = """      if funclet_eh
+        # Windows structured exception handling must enter a catch_switch instruction
+        # which decides which catch body block to enter. Crystal only ever generates one catch body
+        # which is used for all exceptions. For more information on how structured exception handling works in LLVM,
+        # see https://llvm.org/docs/ExceptionHandling.html#exception-handling-using-the-windows-runtime
+        catch_body = new_block "catch_body"
+        catch_switch = builder.catch_switch(@catch_pad || LLVM::Value.null, @rescue_block || LLVM::BasicBlock.null, 1)
+        builder.add_handler catch_switch, catch_body
+
+        # We're now generating the catch body, which must begin with a catchpad instruction
+        position_at_end catch_body
+
+        exception_type = @program.exception.virtual_type
+        exception_llvm_type = llvm_type(exception_type)
+
+        if wasm_target
+          # WebAssembly reuses the funclet IR but not the msvc catchpad shape. Its
+          # catchpad declares a single catch-all operand, and the caught exception
+          # arrives through llvm.wasm.get.exception(token), which WasmEHPrepare
+          # rewrites to the wasm `catch` instruction. There is no catch-object slot,
+          # so the exception is unwrapped by __crystal_get_exception exactly as the
+          # landing-pad path below does.
+          catch_pad = builder.catch_pad catch_switch, [llvm_context.void_pointer.null]
+          @catch_pad = catch_pad
+
+          get_wasm_exception_fun = fetch_typed_fun(@llvm_mod, "llvm.wasm.get.exception") do
+            LLVM::Type.function([catch_pad.type], llvm_context.void_pointer, false)
+          end
+          unwind_ex_obj = call get_wasm_exception_fun, [catch_pad]
+
+          get_exception_fun = main_fun(GET_EXCEPTION_NAME)
+          get_exception_arg_type = get_exception_fun.type.params_types.first # LibUnwind::Exception*
+          get_exception_arg = pointer_cast(unwind_ex_obj, get_exception_arg_type)
+
+          set_current_debug_location node if @debug.line_numbers?
+          caught_exception_ptr = call get_exception_fun, [get_exception_arg]
+          caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
+          exception_type_id = load llvm_context.int32, caught_exception
+        else
+          # Allocate space for the caught exception
+          caught_exception_ptr = alloca exception_llvm_type
+
+          # The catchpad instruction dictates which types of exceptions this block handles,
+          # we want all of them, so we rescue all void* by passing the void_ptr_type_descriptor.
+          # We also need to record the catch pad instruction in `@catch_pad` to refer to the parent catch
+          # pad in nested rescue blocks, and to generate funclet information for function calls which are
+          # "inside" this catchpad. More information on this is available in the link above.
+          @catch_pad = builder.catch_pad catch_switch, [void_ptr_type_descriptor, int32(0), caught_exception_ptr]
+
+          # builder.printf("catchpad entered #{node.location}\\n", catch_pad: @catch_pad)
+
+          caught_exception = load exception_llvm_type, caught_exception_ptr
+          exception_type_id = type_id(caught_exception, exception_type)
+        end
+      else"""
+
+# The ensure re-raise catchpad (exceptions raised inside a `rescue` body). Same
+# wasm shape as above; it never reads the exception, only re-raises it, so it
+# needs no catch-object slot at all.
+CODEGEN_ENSURE_OLD = """        if msvc
+          rescue_ensure_body = new_block "rescue_ensure_body"
+          catch_switch = builder.catch_switch(old_catch_pad || LLVM::Value.null, @rescue_block || LLVM::BasicBlock.null, 1)
+          builder.add_handler catch_switch, rescue_ensure_body
+
+          position_at_end rescue_ensure_body
+
+          @catch_pad = builder.catch_pad catch_switch, [void_ptr_type_descriptor, int32(0), llvm_context.void_pointer.null]"""
+
+CODEGEN_ENSURE_NEW = """        if funclet_eh
+          rescue_ensure_body = new_block "rescue_ensure_body"
+          catch_switch = builder.catch_switch(old_catch_pad || LLVM::Value.null, @rescue_block || LLVM::BasicBlock.null, 1)
+          builder.add_handler catch_switch, rescue_ensure_body
+
+          position_at_end rescue_ensure_body
+
+          if wasm_target
+            # As in the rescue pad: a wasm catchpad takes a single catch-all
+            # operand, and a re-raise needs no catch-object slot.
+            @catch_pad = builder.catch_pad catch_switch, [llvm_context.void_pointer.null]
+          else
+            @catch_pad = builder.catch_pad catch_switch, [void_ptr_type_descriptor, int32(0), llvm_context.void_pointer.null]
+          end"""
+
+# The re-raise itself. `codegen_re_raise` must branch on the *same* predicate as
+# its caller (`funclet_eh`), or on wasm the caller enters the funclet path
+# (leaving `unwind_ex_obj` nil) while the callee takes the non-funclet path and
+# asserts on it. msvc re-raises with `_CxxThrowException`; the wasm analogue is
+# LLVM's `llvm.wasm.rethrow` intrinsic, which rethrows the exception caught by the
+# nearest enclosing catch -- both call sites sit inside a catchpad.
+CODEGEN_RERAISE_OLD = """  def codegen_re_raise(node, unwind_ex_obj)
+    if @program.has_flag?("msvc")
+      # On the MSVC C++ ABI we can re-raise by calling _CxxThrowException with two null arguments
+      call windows_throw_fun, [llvm_context.void_pointer.null, llvm_context.void_pointer.null]
+      unreachable
+    else"""
+
+CODEGEN_RERAISE_NEW = """  def codegen_re_raise(node, unwind_ex_obj)
+    if @program.target_machine.triple.starts_with?("wasm32")
+      # WebAssembly has no _CxxThrowException. Its re-raise is LLVM's
+      # llvm.wasm.rethrow intrinsic, which rethrows the exception caught by the
+      # nearest enclosing catch. Both call sites above sit inside a catchpad, so
+      # this re-raises exactly the exception being handled.
+      rethrow_fun = fetch_typed_fun(@llvm_mod, "llvm.wasm.rethrow") do
+        LLVM::Type.function([] of LLVM::Type, llvm_context.void, false)
+      end
+      call rethrow_fun
+      unreachable
+    elsif @program.has_flag?("msvc")
+      # On the MSVC C++ ABI we can re-raise by calling _CxxThrowException with two null arguments
+      call windows_throw_fun, [llvm_context.void_pointer.null, llvm_context.void_pointer.null]
+      unreachable
+    else"""
+
+# The wasm personality declaration (see PERSONALITY_SET above).
+WASM_PERSONALITY_FUN_OLD = """  private def windows_personality_fun
+    fetch_typed_fun(@llvm_mod, "__CxxFrameHandler3") do
+      LLVM::Type.function([] of LLVM::Type, @llvm_context.int32, true)
+    end
+  end
+end"""
+
+WASM_PERSONALITY_FUN_NEW = """  private def windows_personality_fun
+    fetch_typed_fun(@llvm_mod, "__CxxFrameHandler3") do
+      LLVM::Type.function([] of LLVM::Type, @llvm_context.int32, true)
+    end
+  end
+
+  # WasmEHPrepare requires a scoped personality on every function that owns a
+  # catchpad; libc++abi provides this one. It is never called directly -- the VM's
+  # unwinder and _Unwind_CallPersonality drive it -- but it must be declared.
+  private def wasm_personality_fun
+    fetch_typed_fun(@llvm_mod, "__gxx_wasm_personality_v0") do
+      LLVM::Type.function([] of LLVM::Type, @llvm_context.int32, true)
+    end
+  end
+end"""
+
+# The main module's personality (the per-function one is set in exception.cr).
+CODEGEN_PERSONALITY_OLD = """      if @program.has_flag?("msvc")
+        @personality_name = "__CxxFrameHandler3"
+        @main.personality_function = windows_personality_fun.func
+      else
+        @personality_name = "__crystal_personality"
+      end"""
+
+CODEGEN_PERSONALITY_NEW = """      if @program.has_flag?("msvc")
+        @personality_name = "__CxxFrameHandler3"
+        @main.personality_function = windows_personality_fun.func
+      elsif @program.target_machine.triple.starts_with?("wasm32")
+        # WebAssembly EH uses libc++abi's scoped wasm personality, which
+        # WasmEHPrepare requires on every function that owns a catchpad.
+        @personality_name = "__gxx_wasm_personality_v0"
+        @main.personality_function = wasm_personality_fun.func
+      else
+        @personality_name = "__crystal_personality"
+      end"""
+
+# The one thing the C API cannot set: WebAssembly's *exception model*. It is
+# chosen by the LLVM `cl::opt` `-wasm-enable-eh` (WebAssemblyMCAsmInfo.cpp:53,
+# WebAssemblyTargetMachine.cpp:430), which clang's `-fwasm-exceptions` also sets.
+# With it unset the wasm target machine reports `ExceptionHandling::None`, so
+# TargetPassConfig runs the `lowerinvoke` pass -- which converts every `invoke`
+# to a `call` and deletes the `catchswitch`/`catchpad` -- and the exception
+# escapes the module no matter how correct the funclet IR is. `--mattr`
+# (`+exception-handling`) only toggles the subtarget feature; it does not select
+# the model. So the frontend has to flip the option itself, once, after the wasm
+# target is initialized (so the option is registered) and before the target
+# machine's MCAsmInfo is built. This lives in a compiler file (not llvm.cr)
+# because the bootstrap resolves `require "llvm"` against the *installed*
+# distribution, which would not carry the edit.
+CODEGEN_TARGET_EH_INIT_OLD = """    when "wasm32"
+      LLVM.init_webassembly
+    else"""
+
+CODEGEN_TARGET_EH_INIT_NEW = """    when "wasm32"
+      LLVM.init_webassembly
+      # The wasm exception model is an LLVM `cl::opt` the C API cannot set, and
+      # the subtarget feature must agree or `try`/`catch` cannot be selected; so
+      # a wasm target always gets both. See enable_wasm_eh.
+      enable_wasm_eh
+      features += "+exception-handling" unless features.includes?("exception-handling")
+    else"""
+
+CODEGEN_TARGET_EH_METHOD_OLD = """    environment == other.environment
+  end
+end"""
+
+CODEGEN_TARGET_EH_METHOD_NEW = """    environment == other.environment
+  end
+
+  @@wasm_eh_enabled = false
+
+  # Turns on WebAssembly exception handling in the wasm backend.
+  #
+  # The exception model is selected by an LLVM `cl::opt` (`-wasm-enable-eh`) that
+  # is not reachable through the LLVM C API. Without it the wasm backend runs the
+  # `lowerinvoke` pass and silently discards every `try`/`catch`, so a raised
+  # exception escapes the module instead of being caught. clang's
+  # `-fwasm-exceptions` sets the very same option. Idempotent: the option parser
+  # is only meant to run once per process.
+  private def enable_wasm_eh : Nil
+    return if @@wasm_eh_enabled
+    @@wasm_eh_enabled = true
+
+    # LLVMParseCommandLineOptions skips argv[0], hence the leading "crystal".
+    LLVM.parse_command_line_options(["crystal", "-wasm-enable-eh"])
+  end
+end"""
+
+# (relative path, old, new, marker) -- marker is a string present only in the
+# patched file, needed when `old` survives inside `new` (pure insertions), so that
+# a second run recognises the patch as applied instead of applying it again.
 PATCHES = [
-    ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW),
-    ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW),
-    ("compiler/crystal/command.cr", DISPATCH_OLD, DISPATCH_NEW),
-    ("compiler/crystal/ffi/lib_ffi.cr", FFI_ABI_OLD, FFI_ABI_NEW),
-    ("process/status.cr", STATUS_SIGNAL_OLD, STATUS_SIGNAL_NEW),
-    ("compiler/crystal/config.cr", EXEC_PATH_OLD, EXEC_PATH_NEW),
-    ("crystal/event_loop/wasi.cr", WASI_OPEN_OLD, WASI_OPEN_NEW),
-    ("raise.cr", WASM_RAISE_STUBS_OLD, WASM_RAISE_STUBS_NEW),
-    ("raise.cr", WASM_RAISE_UNLESS_OLD, WASM_RAISE_UNLESS_NEW),
-    ("raise.cr", WASM_RAISE_DEF_OLD, WASM_RAISE_DEF_NEW),
-    ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW),
-    ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW),
-    ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW),
-    # wasm EH in LLVM uses the funclet representation -- `catchswitch`/`catchpad`,
-    # lowered to `catch __cpp_exception` (WebAssemblyISelDAGToDAG.cpp) -- which is
-    # exactly Crystal's msvc path. Its landingpad path is dropped on wasm: the
-    # emitted module had a `throw` and no `try` at all, so the exception escaped.
-    ("compiler/crystal/codegen/exception.cr", MSVC_BRANCH_OLD, MSVC_BRANCH_NEW),
-    ("compiler/crystal/codegen/exception.cr", MSVC_IF_RESCUE_OLD, MSVC_IF_RESCUE_NEW),
-    ("compiler/crystal/codegen/exception.cr", MSVC_IF_ENSURE_OLD, MSVC_IF_ENSURE_NEW),
+    ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW, "{% skip_file if flag?(:without_docs) %}"),
+    ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW, "{% skip_file if flag?(:without_docs) %}"),
+    ("compiler/crystal/command.cr", DISPATCH_OLD, DISPATCH_NEW, None),
+    ("compiler/crystal/ffi/lib_ffi.cr", FFI_ABI_OLD, FFI_ABI_NEW, "wasm32 is ILP32, like i386-unix"),
+    ("process/status.cr", STATUS_SIGNAL_OLD, STATUS_SIGNAL_NEW, None),
+    ("compiler/crystal/config.cr", EXEC_PATH_OLD, EXEC_PATH_NEW, None),
+    ("crystal/event_loop/wasi.cr", WASI_OPEN_OLD, WASI_OPEN_NEW, None),
+    ("raise.cr", WASM_RAISE_STUBS_OLD, WASM_RAISE_STUBS_NEW, None),
+    ("raise.cr", WASM_RAISE_UNLESS_OLD, WASM_RAISE_UNLESS_NEW, None),
+    ("raise.cr", WASM_RAISE_DEF_OLD, WASM_RAISE_DEF_NEW, None),
+    ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW, None),
+    ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW, '{% unless flag?(:interpreted) %}\n  require "exception/lib_unwind"\n{% end %}'),
+    ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW, "def self.print_backtrace : Nil"),
+    ("compiler/crystal/codegen/exception.cr", MSVC_BRANCH_OLD, MSVC_BRANCH_NEW, "funclet_eh = msvc || wasm_target"),
+    ("compiler/crystal/codegen/exception.cr", PERSONALITY_SET_OLD, PERSONALITY_SET_NEW, None),
+    ("compiler/crystal/codegen/exception.cr", CODEGEN_RESCUE_OLD, CODEGEN_RESCUE_NEW, None),
+    ("compiler/crystal/codegen/exception.cr", CODEGEN_ENSURE_OLD, CODEGEN_ENSURE_NEW, None),
+    ("compiler/crystal/codegen/exception.cr", CODEGEN_RERAISE_OLD, CODEGEN_RERAISE_NEW, None),
+    ("compiler/crystal/codegen/exception.cr", WASM_PERSONALITY_FUN_OLD, WASM_PERSONALITY_FUN_NEW, None),
+    ("compiler/crystal/codegen/codegen.cr", CODEGEN_PERSONALITY_OLD, CODEGEN_PERSONALITY_NEW, None),
+    ("compiler/crystal/codegen/target.cr", CODEGEN_TARGET_EH_INIT_OLD, CODEGEN_TARGET_EH_INIT_NEW, None),
+    ("compiler/crystal/codegen/target.cr", CODEGEN_TARGET_EH_METHOD_OLD, CODEGEN_TARGET_EH_METHOD_NEW, None),
 ]
 
 
@@ -376,13 +559,20 @@ def main() -> int:
         print(f"not a Crystal source tree: {root}", file=sys.stderr)
         return 2
 
-    for rel, old, new in PATCHES:
+    for rel, old, new, marker in PATCHES:
         path = root / rel
         text = path.read_text()
-        # Check `old` first: a replacement can be a common string (one patch
-        # replaces a block with `{% else %}`), so `new in text` is not a usable
-        # "already applied" signal on its own.
-        if old in text:
+        # Decide "already applied" carefully: when the replacement contains the
+        # original (an insertion), `old` survives inside `new`, so looking for
+        # `old` cannot mean "not applied" -- those patches carry an explicit
+        # marker. Otherwise both the old-absent/new-present states are enough.
+        if marker is not None:
+            already = marker in text
+        else:
+            already = new in text and old not in text
+        if already:
+            print(f"already applied: {rel}")
+        elif old in text:
             path.write_text(text.replace(old, new, 1))
             print(f"patched: {rel}")
         elif new in text:

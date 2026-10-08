@@ -5,10 +5,12 @@ compiler itself as a `wasm32-wasip1` module, linked against the libLLVM produced
 in [`../llvm-wasm`](../llvm-wasm). If that links, the libLLVM package's interface
 is proven by a real consumer and the split is safe.
 
-**Status: begun, not finished.** The compiler cross-compiles far enough to hit
-its own tooling, and the remaining work is charted below. This is a port of the
-compiler's environment — the same shape as the libLLVM port, and a comparable
-amount of effort.
+**Status: the compiler runs, reads the stdlib, and compiles a program to a wasm
+object that links and runs — exceptions included.** (See "Resolution" below; the
+earlier narrative is kept as the log of how it was found.) What remains is the
+*browser* side: `lld` inside the page, and shipping the stdlib and a wasm sysroot
+as assets. This was a port of the compiler's environment — the same shape as the
+libLLVM port.
 
 ## What has to be true for this to work
 
@@ -229,6 +231,10 @@ used. Two things it needs, which the first attempt ran into:
 
 ## Compiling on the page — what is still needed
 
+> **Superseded for the exception part — see "Resolution" at the end.** The
+> subsections below are the log of how the blocker was chased down; where they
+> contradict "Resolution", the latter is what actually works.
+
 ### Latest state: the catch-all clause, and a verifier crash
 
 The codegen patch now branches on `@program.target_machine.triple` (a **runtime**
@@ -323,21 +329,117 @@ binding says `SizeT`).
 | The compiler as wasm | done — `crystal.wasm`, runs |
 | A WASI filesystem host | done on the prototype path — `clang-wasm`'s toolchain (memfs), via `try-compile.mjs` |
 | Crystal's WASI file `open` | patched — the compiler reads sources |
-| Stack size for deep recursion | patched at link — 32 MiB |
-| **Exceptions on `wasm32-wasip1`** | **missing — Crystal's codegen has no wasm exception model** |
-| wasm `lld` to link the emitted object | available from `clang-wasm`, not yet wired |
+| Stack size for deep recursion | patched at link — 32 MiB (tunable: `STACK_SIZE`) |
+| **Exceptions on `wasm32-wasip1`** | **done — see "Resolution" below** |
+| Compiling a program → object | **done** — `try-compile.mjs` emits `out.o.wasm` |
+| Linking the emitted object (`lld`) | done in the harness with wasi-sdk's `wasm-ld`; the *browser* still needs `lld.wasm` |
 | stdlib (1552 `.cr`, 15 MB) + wasm sysroot as assets | collected, not yet shipped |
-| The page: editable editor → compile → link → run | blocked on the exceptions row |
+| The page: editable editor → compile → link → run | needs the linking/UI work below |
+
+## Resolution — the wasm catch works
+
+The two codegen edits above turned out to be only part of it. The blocker was
+resolved in three parts, all in `apply-patches.py`:
+
+1. **The funclet shape, not the landing pad.** LLVM's wasm backend lowers the
+   *Windows-style funclet* IR (`catchswitch`/`catchpad`/`catchret`), never an
+   Itanium `landingpad`, so a wasm target has to take Crystal's **msvc** code path
+   (`funclet_eh = msvc || wasm_target`). But wasm's catchpad is shaped differently
+   from msvc's: a single catch-all operand (`[ptr null]`) and the caught exception
+   from `llvm.wasm.get.exception(token)`, which `WasmEHPrepare` rewrites to the
+   wasm `catch` instruction — *not* msvc's three-operand catchpad with a
+   catch-object slot. `codegen_re_raise` then re-raises with **`llvm.wasm.rethrow`**
+   (there is no `_CxxThrowException` on wasm), and both the rescue and the
+   ensure-re-raise pads use that shape. A wasm personality
+   (`__gxx_wasm_personality_v0`) is set on every function that owns a catchpad.
+   `codegen_re_raise` branches on the *same* predicate as its caller — that
+   mismatch was the `NilAssertionError`.
+
+2. **The exception model is an LLVM option the C API cannot set.**
+   `WebAssemblyMCAsmInfo` only selects `ExceptionHandling::Wasm` when the LLVM
+   `cl::opt` **`-wasm-enable-eh`** is set (`WebAssemblyMCAsmInfo.cpp:53`).
+   `--mattr=+exception-handling` only toggles the subtarget feature — it does not
+   select the model. With the model at `None`, `TargetPassConfig` runs the
+   **`lowerinvoke`** pass, which rewrites every `invoke` to a `call` and deletes
+   the `catchswitch`/`catchpad`: the exception then escapes no matter how correct
+   the funclet IR is. clang's `-fwasm-exceptions` sets the same option through
+   `TargetOptions`, which the C API does not expose, so the compiler flips it
+   itself — `LLVM.parse_command_line_options(["crystal", "-wasm-enable-eh"])`
+   before the target machine is built (`codegen/target.cr`), and appends
+   `+exception-handling` to the features. This is the single change that made the
+   difference; it fixes both the native compiler (against the host LLVM) and the
+   wasm compiler (against our libLLVM).
+
+3. **Two V8/Node stacks, and only one of them is the module's.** The compiler's
+   AST passes (semantic analysis, then `CleanupTransformer`) recurse deeply. Two
+   separate stacks are involved:
+   - Crystal's allocas live on the wasm **linear-memory stack** — the one
+     `-Wl,-z,stack-size=33554432` sizes. Exhausting it is a
+     `memory access out of bounds` trap.
+   - The wasm **call frames** live on V8's **native** stack. Deep recursion there
+     raises `RangeError: Maximum call stack size exceeded`, and *no* `-z
+     stack-size` value helps. Node's default native stack is ~1 MiB, far below the
+     8 MiB a native build gets, so the transformer overflows it
+     **non-deterministically** (Crystal's hashes are randomly seeded, so the
+     traversal order — and depth — varies run to run). The fix for the harness is
+     `node --stack-size=4000`; this is documented in `try-compile.mjs`. A browser
+     cannot raise this, so a page may still need a smaller-frame compiler
+     (`-Drelease`) or a less recursive transformer — see "Compiling on the page".
+
+**The reproducible end state** (all from `apply-patches.py`; see `HANDOFF.md`):
+
+```
+$ bash repro.sh
+caught: boom
+done
+
+$ node --stack-size=4000 try-compile.mjs      # crystal.wasm compiles main.cr
+exitCode: 0
+out.o.wasm: 508917 bytes
+
+$ clang --target=wasm32-wasip1 --sysroot=… -fwasm-exceptions -o out.wasm out.o.wasm -lc++ -lc++abi -lunwind …
+$ node …/run-wasi.mjs out.wasm
+hello from the wasm Crystal compiler
+```
+
+That is the whole pipeline: a program is compiled *by the wasm compiler*, and the
+object it emits links and runs.
 
 ## Reproduce
 
-Needs a native Crystal on `PATH` (or `CRYSTAL=`), plus the built libLLVM.
+Everything below runs in the `racket-build` WSL distro (Ubuntu 24.04, root). The
+whole sequence, from a clean patched source copy — `$OUT` is `/root/bc-crystal`:
 
 ```bash
-CRYSTAL=/opt/crystal-1.17.0/bin/crystal bash build/crystal-wasm/cross-compile.sh
+OUT=$OUT
+rm -rf $OUT/src && cp -r /opt/crystal-1.17.0/share/crystal/src $OUT/src
+python3 build/crystal-wasm/apply-patches.py $OUT/src   # idempotent; safe to re-run
+
+bash build/crystal-wasm/repro.sh                        # fast check: caught: boom / done
+
+OUT=$OUT bash build/crystal-wasm/bootstrap.sh           # native patched compiler
+CRYSTAL=$OUT/bin/crystal-native CRYSTAL_SRC=/opt/crystal-1.17.0/share/crystal/src \
+  bash build/crystal-wasm/cross-compile.sh              # crystal.o.wasm
+bash build/crystal-wasm/link.sh                         # crystal.wasm
+
+node --stack-size=4000 build/crystal-wasm/try-compile.mjs   # compiles main.cr -> out.o.wasm
 ```
 
-The output is a wasm *object* plus the link command Crystal would have run; the
-real link will be done by hand with wasi-sdk against `../llvm-wasm/out/lib/*.a`,
-the compat stubs, and PCRE2 — exactly as `..//llvm-wasm/verify/run-probe.sh`
-links the LLVM probe.
+`repro.sh` is the seconds-long proxy for the compiler cycle — a three-line
+`begin`/`raise`/`rescue` through the native patched compiler. `try-compile.mjs`
+runs the real `crystal.wasm` against the real stdlib under clang-wasm's WASI
+filesystem; the `--stack-size` is required (see "Resolution" §3). The object it
+writes (`/root/bc-crystal/out.o.wasm`) then links and runs like the repro:
+
+```bash
+clang --target=wasm32-wasip1 --sysroot=/opt/wasi-sdk-33/share/wasi-sysroot \
+  -O1 -nostartfiles -fwasm-exceptions -o out.wasm out.o.wasm \
+  -L/root/bc-pcre2/build -lpcre2-8 -lc++ -lc++abi -lunwind \
+  -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-getpid -lwasi-emulated-process-clocks
+node build/llvm-wasm/verify/run-wasi.mjs out.wasm       # hello from the wasm Crystal compiler
+```
+
+The cross-compile on its own still prints the wasm *object* plus the link command
+Crystal would have run; the real link is done by hand with wasi-sdk against
+`../llvm-wasm/out/lib/*.a`, the compat stubs, and PCRE2 — exactly as
+`../llvm-wasm/verify/run-probe.sh` links the LLVM probe.

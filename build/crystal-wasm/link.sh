@@ -31,8 +31,14 @@ if [ -n "$PCRE_LIB" ]; then
   PCRE_FLAGS="-L$PCRE_LIB -lpcre2-8"
 fi
 
+# This is Crystal's *linear-memory* stack -- where allocas live. The 64 KiB wasm
+# default overflows it during semantic analysis. Note the other stack: deep
+# *call* recursion (the AST passes) uses V8's native stack, which this flag does
+# not affect; that one needs `node --stack-size` (see try-compile.mjs).
+STACK_SIZE="${STACK_SIZE:-33554432}"
+
 "$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles -fwasm-exceptions \
-  -Wl,-z,stack-size=33554432 \
+  -Wl,-z,stack-size="$STACK_SIZE" \
   -o "$OUT/crystal.wasm" \
   "$OUT/crystal.o.wasm" "$OUT/compat.o" $LIBS $PCRE_FLAGS \
   -lc++ -lc++abi -lunwind \

@@ -1,16 +1,25 @@
 // try-compile.mjs — run the wasm Crystal compiler under clang-wasm's runtime.
 //
-//   node try-compile.mjs
+//   node --stack-size=4000 try-compile.mjs
+//
+// The `--stack-size` is not optional: V8 gives a wasm instance a *native* stack
+// of about 1 MiB by default, and the compiler's AST passes (CleanupTransformer
+// in particular) recurse deeply enough with large-enough wasm frames to exceed
+// it -- non-deterministically, since Crystal hashes are randomly seeded. The
+// module's own `-z stack-size` (link.sh) governs the *other* stack, the linear
+// one Crystal's allocas use; it does not help here. Failure looks like
+// "RangeError: Maximum call stack size exceeded".
 //
 // Env:
 //   CLANG_WASM   path to clang-wasm's toolchain.node.js   (default: sibling checkout)
 //   CRYSTAL_WASM path to crystal.wasm                     (default: /root/bc-crystal/crystal.wasm)
 //   CRYSTAL_SRC  path to the Crystal stdlib sources       (default: /root/bc-crystal/src)
+//   OUT_OBJ      where to write the emitted object        (default: /root/bc-crystal/out.o.wasm)
 //
 // This is an integration harness, not the page yet: it answers "does the
 // compiler we built actually read a filesystem and emit an object?" using
 // clang-wasm's toolchain to provide the WASI filesystem.
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -55,8 +64,16 @@ const module = await WebAssembly.compile(await readFile(CRYSTAL_WASM));
 console.log('running the compiler …');
 const command = await toolchain.runCommand(module, {
 	// Crystal's ARGV does not include the program name, so the first element is
-	// the command itself.
-	args: ['build', '--cross-compile', '--target=wasm32-unknown-wasi', '-o', 'out.o.wasm', 'main.cr'],
+	// the command itself. The flags mirror cross-compile.sh: `use_pcre2` avoids
+	// the `pkg-config` shell-out in `regex/engine.cr` (WASI has no processes),
+	// and the `without_*` flags drop the compiler-only tooling. wasm exception
+	// handling is enabled by the compiler itself (no `--mattr` needed).
+	args: [
+		'build', '--cross-compile', '--target=wasm32-unknown-wasi',
+		'-Di_know_what_im_doing', '-Dwithout_playground', '-Dwithout_docs',
+		'-Dwithout_interpreter', '-Duse_pcre2',
+		'-o', 'out.o.wasm', 'main.cr',
+	],
 	env: { CRYSTAL_PATH: '/src' },
 	files,
 });
@@ -66,3 +83,8 @@ if (command.stdout) console.log('--- stdout ---\n' + command.stdout);
 if (command.stderr) console.log('--- stderr ---\n' + command.stderr);
 const object = command.readFile('out.o.wasm');
 console.log('out.o.wasm:', object ? `${object.length} bytes` : 'not produced');
+if (object) {
+	const OUT_OBJ = process.env.OUT_OBJ ?? '/root/bc-crystal/out.o.wasm';
+	await writeFile(OUT_OBJ, object);
+	console.log('wrote', OUT_OBJ);
+}

@@ -8,8 +8,9 @@ Everything a new session needs to pick this up cold. Read this first, then
 no server. Crystal has no client-side compiler, so this repo set out to make one.
 
 **One-line status.** libLLVM for wasm is built and verified; the Crystal compiler builds, links
-and *runs* as wasm and reads the standard library; the last blocker is exception handling, and
-it is now one function in Crystal's codegen plus the linker/UI work above it.
+and *runs* as wasm; **exception handling now works**, and the compiler compiles a program to a
+wasm object that links and runs. The remaining work is the browser side: `lld` in the page and
+shipping the stdlib/sysroot as assets (§7). See §6 for the (now closed) exception story.
 
 ---
 
@@ -44,8 +45,8 @@ Do not rely on Docker — the daemon is not running. Do not modify
 | --- | --- |
 | **libLLVM 20.1.8 for `wasm32-wasip1`** | **Done.** 99 static archives. A probe links them all, runs under Node's WASI, calls the LLVM C API, registers the wasm target and constructs an IR module. |
 | **Crystal compiler as wasm** | **Done.** `crystal.wasm` (96 MB) builds, links and runs. `--version` prints `Crystal 1.17.0 / LLVM: 20.1.8 / Default target: wasm32-unknown-wasip1`. |
-| **Compiling a program** | Reads the stdlib, parses, reaches semantic analysis and macro interpretation — then hits exceptions. |
-| **Exceptions on wasm** | `raise` is a real wasm `throw`. The catch is the remaining bug: **one function, `codegen_re_raise`**. See §6. |
+| **Compiling a program** | Reads the stdlib, parses, does semantic analysis and macro interpretation, **and emits a wasm object** — `try-compile.mjs` produces `out.o.wasm` for a real program. |
+| **Exceptions on wasm** | **Done.** `raise`/`rescue`/`ensure` work on `wasm32-wasip1`. See §6. |
 | **The page** | Untouched. Still the original PoC: a read-only pane running precompiled samples. Needs the work in §7. |
 
 ---
@@ -114,16 +115,26 @@ STAGE=verify WASI_SDK=/opt/wasi-sdk-33 bash build/llvm-wasm/build.sh
 ```bash
 OUT=/root/bc-crystal
 rm -rf $OUT/src && cp -r /opt/crystal-1.17.0/share/crystal/src $OUT/src
-python3 build/crystal-wasm/apply-patches.py $OUT/src      # apply all patches
-OUT=$OUT bash build/crystal-wasm/bootstrap.sh             # ~10 min: native crystal-native
+python3 build/crystal-wasm/apply-patches.py $OUT/src      # idempotent; safe to re-run
+
+OUT=$OUT bash build/crystal-wasm/repro.sh                 # seconds: caught: boom / done
+
+OUT=$OUT bash build/crystal-wasm/bootstrap.sh             # native crystal-native
 CRYSTAL=$OUT/bin/crystal-native CRYSTAL_SRC=/opt/crystal-1.17.0/share/crystal/src \
-  bash build/crystal-wasm/cross-compile.sh                # ~10 min: crystal.o.wasm
-bash build/crystal-wasm/link.sh                           # ~3 min: crystal.wasm
-/root/emsdk/node/24.19.0_64bit/bin/node build/crystal-wasm/try-compile.mjs   # ~5 min
+  bash build/crystal-wasm/cross-compile.sh                # crystal.o.wasm
+bash build/crystal-wasm/link.sh                           # crystal.wasm
+
+# ~1 min warm (Crystal caches objects); the --stack-size is required — see §6.3
+/root/emsdk/node/24.19.0_64bit/bin/node --stack-size=4000 build/crystal-wasm/try-compile.mjs
 ```
 
-**The fast repro.** Never iterate on the 25-minute cycle above. Use a three-line program that
-compiles and links in seconds:
+That last step writes `/root/bc-crystal/out.o.wasm`; link and run it like the repro below
+(wasi-sdk `clang -fwasm-exceptions` + `-lunwind -lc++ -lc++abi`) and it prints
+`hello from the wasm Crystal compiler`.
+
+**The fast repro.** Never iterate on the compiler cycle above. Use a three-line program that
+compiles and links in seconds — `build/crystal-wasm/repro.sh` does all of the following in one
+command:
 
 ```bash
 # /root/bc-crystal/exc.cr
@@ -147,63 +158,70 @@ cd /root/bc-crystal && export CRYSTAL_PATH=/root/bc-crystal/src
 ```
 
 `llvm-objdump` from wasi-sdk disassembles wasm and is the tool that cracked the last step:
-`/opt/wasi-sdk-33/bin/llvm-objdump -d exc.wasm`.
+`/opt/wasi-sdk-33/bin/llvm-objdump -d exc.wasm` (look for `try`/`catch`/`rethrow` — their absence
+was the whole bug).
+
+**Gotcha: don't redirect the WSL command's output from Windows.** `wsl … -- bash x.sh > log`
+puts the log on the *Windows* side; write scripts to files, redirect inside WSL, and read the
+file.
 
 ---
 
-## 6. THE NEXT TASK — make the wasm catch work
+## 6. RESOLVED — the wasm catch works
 
-**Symptom.** `begin/rescue/raise` on wasm throws and the exception escapes the module:
-`Exception [WebAssembly.Exception] {}`.
+**Status: done.** `raise`/`rescue`/`ensure` work on `wasm32-wasip1`; the repro prints
+`caught: boom` / `done`, and `crystal.wasm` compiles a program whose object links and runs.
+The full detail is in [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works);
+the shape of the fix, so it is not undone:
 
-**What is already right** (do not undo it):
+**1. The funclet shape — Crystal's msvc path, with a wasm-specific catchpad.** LLVM's wasm
+backend lowers the *Windows-style funclet* IR (`catchswitch`/`catchpad`/`catchret`), never an
+Itanium `landingpad`, so a wasm target takes the **msvc** path (`funclet_eh = msvc || wasm_target`,
+a *runtime* target check). But the catchpad is shaped differently from msvc's:
+a single catch-all operand (`[ptr null]`) and the caught exception fetched with
+`llvm.wasm.get.exception(token)` (which `WasmEHPrepare` rewrites to the wasm `catch`
+instruction) — **not** msvc's three-operand pad with a catch-object slot. Re-raise is
+**`llvm.wasm.rethrow`** (no `_CxxThrowException` on wasm). A wasm personality
+(`__gxx_wasm_personality_v0`) is set on every function that owns a catchpad.
+`codegen_re_raise` branches on the *same* predicate as its caller — the old mismatch was the
+`NilAssertionError`.
 
-- The compiler is built with `--mattr=+exception-handling` and linked with
-  `-fwasm-exceptions` (the `eh` sysroot) plus `-lunwind`. The WebAssembly target machine
-  *forces* `ExceptionModel = Wasm` itself, so nothing needs the LLVM `TargetOptions` the C API
-  cannot set.
-- The four `wasm32` stubs in `src/raise.cr` are removed, so `raise` performs a real wasm
-  `throw` (`_Unwind_RaiseException` → `__builtin_wasm_throw`).
-- Disassembling the repro proved the landing pad was **dropped**: the module had `throw 0` and
-  **no `try`/`catch` at all**. The cause: **LLVM's wasm EH uses the funclet representation**
-  (`catchswitch`/`catchpad`, lowered to `catch __cpp_exception` —
-  `WebAssemblyISelDAGToDAG.cpp`), which is Crystal's **msvc** path, not its landing-pad path.
-  So `apply-patches.py` now routes a wasm target down the msvc branch, by extending
-  `msvc = @program.has_flag?("msvc")` with a runtime target check (it is a runtime flag, so
-  wasm can join it).
+**2. `-wasm-enable-eh` — this was the actual blocker.** `WebAssemblyMCAsmInfo` only selects
+`ExceptionHandling::Wasm` when the LLVM `cl::opt` **`-wasm-enable-eh`** is set
+(`WebAssemblyMCAsmInfo.cpp:53`). `--mattr=+exception-handling` only toggles the subtarget
+feature; it does **not** select the model. With the model at `None`, `TargetPassConfig` runs the
+**`lowerinvoke`** pass, which rewrites every `invoke` to a `call` and deletes the
+`catchswitch`/`catchpad` — so the exception escapes no matter how correct the funclet IR is (and
+the disassembly shows a bare `throw` and no `try`, which is how this looked like a landing-pad
+bug for so long; the `throw` was libunwind's, not the compiler's). clang's `-fwasm-exceptions`
+sets the same option through `TargetOptions`, which the LLVM C API does not expose — so the
+compiler flips it itself, in `codegen/target.cr`:
+`LLVM.parse_command_line_options(["crystal", "-wasm-enable-eh"])` before the target machine is
+built, plus `features += "+exception-handling"`. This is in a *compiler* file, not `llvm.cr`,
+because the bootstrap resolves `require "llvm"` against the installed distribution.
 
-**Where it stops now:**
-
-```
-Nil assertion failed (NilAssertionError)
-  from compiler/crystal/codegen/exception.cr ... in 'codegen_re_raise'
-```
-
-**The fix — two parts, both in `compiler/crystal/codegen/exception.cr`:**
-
-1. **Predicate consistency.** The ensure path's caller branches on the new `funclet_eh`, but
-   `codegen_re_raise` itself still branches on `@program.has_flag?("msvc")`. On wasm the caller
-   takes the funclet branch (where `unwind_ex_obj` is never assigned) and the callee takes the
-   non-funclet branch and asserts on it. Both must branch on the same predicate.
-
-2. **A wasm re-raise.** The funclet re-raise is
-   `call windows_throw_fun, [void_pointer.null, void_pointer.null]` — `_CxxThrowException`,
-   Windows-only. The direct wasm analogue is LLVM's **`llvm.wasm.rethrow`** intrinsic, which
-   re-raises the exception currently being handled, exactly as the Windows call does: declare
-   `void @llvm.wasm.rethrow()`, call it, `unreachable`.
-   The alternative — give the funclet ensure-catchpad a real slot instead of
-   `void_pointer.null` (the rescue path already allocates one for the caught exception) and call
-   Crystal's own `raise_without_backtrace` on it — is more code but avoids the intrinsic.
-
-**How to test:** the repro in §5. Success is `caught: boom` / `done`; failure is the
-`WebAssembly.Exception` escaping.
+**3. Two stacks, and only one of them is the module's.** The compiler's AST passes recurse
+deeply, and there are two different stacks:
+- Crystal's allocas are on the wasm **linear-memory stack**, sized by
+  `-Wl,-z,stack-size=` (`link.sh`, default 32 MiB, `STACK_SIZE` to override). Exhausting it is a
+  `memory access out of bounds` **trap**.
+- The wasm **call frames** are on V8's **native** stack. Overrunning it is a
+  `RangeError: Maximum call stack size exceeded`, and *no* `-z stack-size` value changes it.
+  Node's default native stack is ~1 MiB, below the 8 MiB a native build gets, so
+  `CleanupTransformer` overflows it **non-deterministically** (Crystal's hashes are randomly
+  seeded; traversal depth varies run to run). The harness needs
+  **`node --stack-size=4000`** (`try-compile.mjs` documents this). A browser cannot raise this —
+  see §7.
 
 **Do not reintroduce these — they were wrong paths:**
 
-- `{% if flag?(:wasm32) %}` in codegen. That flag is evaluated when the *compiler is built*, so
-  a natively-built `crystal-native` took the else branch. Use a runtime target check.
-- A catch-all clause on a **landingpad** (`landingpad` clauses are irrelevant on wasm — the
-  whole path is dropped).
+- `{% if flag?(:wasm32) %}` in codegen — it is evaluated when the *compiler is built*, so a
+  natively-built `crystal-native` takes the else branch. Use a runtime target check.
+- A catch-all clause on a **`landingpad`** — wasm never lowers `landingpad`; the whole path is
+  dropped. The catchpad is the shape (above).
+- Relying on `--mattr=+exception-handling` to turn on wasm EH — it does not; `-wasm-enable-eh`
+  does (part 2). `--mattr`/the `features +=` line only makes `try`/`catch` *selectable*.
+- Treating the two stacks as one. `-z stack-size` will not fix a `RangeError`.
 - Any declaration inside a statement-position `{% if %}` in Crystal source: it is not visible
   after `{% end %}`. Use expression-position macros or a runtime `if`.
 
@@ -211,9 +229,13 @@ Nil assertion failed (NilAssertionError)
 
 ## 7. After exceptions — the remaining roadmap
 
-1. **The lld step.** The compiler emits a wasm *object*; nothing in the browser can link it yet.
-   clang-wasm ships `lld.wasm` (usable read-only), or build lld from the LLVM source in
-   `build/llvm-wasm`. Then link the object with the wasm sysroot (see §8).
+The exception blocker is closed (§6). What is left is the browser:
+
+1. **The lld step.** `try-compile.mjs` already links with wasi-sdk's `wasm-ld`, but nothing *in
+   the browser* can link the emitted object yet. clang-wasm ships `lld.wasm` (usable read-only),
+   or build lld from the LLVM source in `build/llvm-wasm`. The link needs the wasm sysroot and
+   the EH runtime (`-fwasm-exceptions`, `-lunwind`, `-lc++abi`) now that EH is on — see the
+   command in `README.md`.
 2. **Assets.** The Crystal stdlib is **1552 `.cr`, 15 MB** (fits clang-wasm's memfs budget of
    4091 nodes). It has to ship with the page, plus a wasm sysroot for linking user programs
    (`crt1.o`, `libc.a`, `libc++.a`, `libc++abi.a`, `libpcre2-8.a`).
@@ -223,7 +245,10 @@ Nil assertion failed (NilAssertionError)
    has no filesystem and will need one for the compiler). `try-compile.mjs` is the Node harness
    that already proves the first three fifths of that flow.
 4. **Consider `-Drelease`** for the compiler build — `crystal.wasm` is 96 MB because it is a
-   debug build, and a page should not download that.
+   debug build, and a page should not download that. It would also help the deep recursion:
+   smaller frames mean the AST passes need less of V8's native stack (§6.3), and a browser
+   cannot be given `--stack-size`. Worth measuring against `try-compile.mjs`; if a release build
+   still overflows, the transformer's recursion depth is the thing to look at.
 
 ---
 
@@ -251,17 +276,24 @@ Nil assertion failed (NilAssertionError)
 `-Dwithout_interpreter`, `-Duse_pcre2`, `--mattr=+exception-handling`.
 
 **Link/compile facts:** `-nostartfiles` (Crystal defines its own `_start`, and `crt1` does too);
-`-z stack-size=33554432` (the 64 KiB default overflows on semantic analysis);
+`-z stack-size=33554432` (the 64 KiB default overflows the *linear* stack on semantic analysis);
 `CRYSTAL_PATH` must be pinned at the patched copy or the compiler's source loads twice
-("can't reopen enum and add more constants").
+("can't reopen enum and add more constants"). Note the bootstrap resolves `require "llvm"`
+against the *installed* distribution, so a patch to `src/llvm.cr` does **not** reach the
+bootstrap compiler — put compiler-side helpers in `compiler/…` files instead.
 
-**Two self-inflicted lessons worth keeping:**
+**Lessons worth keeping:**
 
-- `apply-patches.py`'s idempotency check must test `old` **before** `new`; a replacement can be
-  a common string (`{% else %}`) and looks "already applied" when it is not.
-- The bootstrap is unavoidable for **any** codegen change: landing pads come from whichever
-  compiler compiles the code, so the native compiler must be rebuilt with the patch and then
-  used for the cross-compile.
+- `apply-patches.py` idempotency: the check must look for a marker that exists *only* in the
+  patched file. `old`-first alone is not enough — a pure insertion keeps `old` alive inside
+  `new`, so the patch re-applies on every run (this bit us: duplicated `<% unless %>` blocks and
+  a duplicated `print_backtrace`). Patches whose `new` contains `old` now carry an explicit
+  `marker`; the script is verified to be a no-op on the second and third run.
+- The bootstrap is unavoidable for **any** codegen change: the catchpad/landingpad shape comes
+  from whichever compiler compiles the code, so the native compiler must be rebuilt with the
+  patch and then used for the cross-compile. (Warm Crystal caches make this ~30 s, not 10 min.)
+- When disassembling a linked wasm to check EH, remember the `throw` may be libunwind's, not the
+  compiler's — check the *object* (`exc.o.wasm`), not just the linked module.
 
 ---
 
