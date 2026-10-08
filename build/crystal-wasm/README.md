@@ -83,9 +83,45 @@ PCRE2 (its `build/Dockerfile` does it) if PCRE2 is the one wanted.
 
 ### After PCRE
 
-The runtime host: an in-memory filesystem so the compiler can read sources and
-write emitted objects, and `lld` to link them — the same problem
-`public/wasi-preview1.js` solves for running programs, one level up.
+The compiler binary is done; what it needs to *compile something* is not. A page
+where you edit and run Crystal needs a WASI filesystem host, the standard library
+as an asset, and a wasm `lld` to link the object the compiler emits. That work
+started on the fastest path — reusing `clang-wasm`'s toolchain to provide the
+WASI filesystem — and reached a precise blocker:
+
+```
+RuntimeError: unreachable
+  at *raise<NotImplementedError>
+  at *Crystal::EventLoop::Wasi#open
+  at *Crystal::System::File::open
+  at File::read
+  at *Crystal::Command#gather_sources
+```
+
+`try-compile.mjs` runs the whole chain: the 94 MB compiler instantiates in the
+WASI host, runs, parses `build --cross-compile --target=wasm32-unknown-wasi`, and
+reaches `File.read("main.cr")` — where **Crystal 1.17's own WASI file layer stops**.
+`Crystal::EventLoop::Wasi#open` is a `NotImplementedError` stub, so a Crystal
+program on wasm cannot open a file, and a compiler must. Everything under it —
+our libLLVM, the link, the toolchain, the filesystem host, argv, output capture —
+works; the gap is inside Crystal's stdlib.
+
+So the next workstream is **Crystal's WASI file I/O**: implement
+`Crystal::EventLoop::Wasi#open`/`read`/`write`/`seek`/`close` over the WASI
+`path_open`/`fd_read`/`fd_write`/`fd_seek`/`fd_close` calls (Crystal already binds
+them for other platforms). After that: the lld step, the stdlib/sysroot assets, and
+the page itself.
+
+## Compiling on the page — what is still needed
+
+| Piece | State |
+| --- | --- |
+| The compiler as wasm | done — `crystal.wasm`, runs |
+| A WASI filesystem host | done on the prototype path — `clang-wasm`'s toolchain (memfs), via `try-compile.mjs` |
+| Crystal's WASI file I/O | **missing — Crystal 1.17 stubs `EventLoop::Wasi#open`** |
+| wasm `lld` to link the emitted object | available from `clang-wasm`, not yet wired |
+| stdlib (1552 `.cr`, 15 MB) + wasm sysroot as assets | collected, not yet shipped |
+| The page: editable editor → compile → link → run | not started; needs the two rows above |
 
 ## Reproduce
 
