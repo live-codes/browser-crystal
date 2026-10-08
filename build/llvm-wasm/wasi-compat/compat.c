@@ -11,6 +11,7 @@
  *     -c compat.c -o compat.o
  * and link the object into anything that links libLLVM.
  */
+#include <dlfcn.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -105,3 +106,17 @@ int posix_madvise(void *addr, size_t len, int advice) {
 	(void)addr; (void)len; (void)advice;
 	return 0;
 }
+
+/* <dlfcn.h> declares these on WASI, but libdl.a there is an empty stub, so
+ * anything that pulls in LLVM's DynamicLibrary.cpp (the Crystal compiler does)
+ * fails to link. There is no dynamic loading on WASI; report failure. */
+void *dlopen(const char *filename, int flags) {
+	(void)filename; (void)flags;
+	return 0;
+}
+void *dlsym(void *handle, const char *symbol) {
+	(void)handle; (void)symbol;
+	return 0;
+}
+int dlclose(void *handle) { (void)handle; return -1; }
+char *dlerror(void) { return 0; }
