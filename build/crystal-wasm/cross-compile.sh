@@ -58,6 +58,7 @@ echo "=== crystal build compiler/crystal.cr --target wasm32-unknown-wasi ==="
   -Dwithout_playground \
   -Dwithout_docs \
   -Dwithout_interpreter \
+  -Duse_pcre2 \
   --cross-compile --target wasm32-unknown-wasi \
   -o "$OUT/crystal.o.wasm"
 echo "rc=$?"

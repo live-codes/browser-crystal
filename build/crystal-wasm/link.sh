@@ -15,7 +15,7 @@ set -uo pipefail
 OUT="${OUT:-/root/bc-crystal}"
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk-33}"
 LLVM_WASM="${LLVM_WASM:-/mnt/d/DevWork/live-codes/browser-crystal/build/llvm-wasm}"
-PCRE_LIB="${PCRE_LIB:-}"          # directory containing a wasm libpcre*.a, if built
+PCRE_LIB="${PCRE_LIB:-/root/bc-pcre2/build}"   # wasm libpcre2-8.a, from build-pcre2.sh
 
 S="$WASI_SDK/share/wasi-sysroot"
 CC="$WASI_SDK/bin/clang"
@@ -28,7 +28,7 @@ LIBS=$(find "$LLVM_WASM/out/lib" -name 'libLLVM*.a' | sort | tr '\n' ' ')
 
 PCRE_FLAGS=""
 if [ -n "$PCRE_LIB" ]; then
-  PCRE_FLAGS="-L$PCRE_LIB -lpcre"
+  PCRE_FLAGS="-L$PCRE_LIB -lpcre2-8"
 fi
 
 "$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles \

@@ -30,14 +30,30 @@ amount of effort.
 
 ## Where it stands
 
-**The Crystal compiler compiles for `wasm32-unknown-wasi` — and links against the
-wasm libLLVM, with one exception.** `cross-compile.sh` produces a 60 MB
-`crystal.o.wasm`; `link.sh` then resolves every symbol out of
-`../llvm-wasm/out/lib/*.a` and the compat layer. The single outstanding need is
-**PCRE**: Crystal's `Regex` wants a wasm build of PCRE, and nothing provides one.
+**The Crystal compiler builds for `wasm32-wasip1`, links against the wasm
+libLLVM, and runs.**
 
-That is the validation the split decision was waiting for — the libLLVM is
-sufficient for a real consumer. What is left is a build, not a discovery.
+```
+$ node run-wasi.mjs crystal.wasm --version
+Crystal 1.17.0
+
+The compiler was not built in release mode.
+
+LLVM: 20.1.8
+Default target: wasm32-unknown-wasip1
+```
+
+`crystal.wasm` is 94 MB — a 60 MB wasm object linked against
+`../llvm-wasm/out/lib/*.a`, a wasm PCRE2, and the compat layer. It reports
+**LLVM 20.1.8**, i.e. our wasm libLLVM rather than the host's 18, and its
+default target is the wasm triple.
+
+That is the validation the split decision was waiting for, and more: the libLLVM
+is sufficient for a real, *running* consumer. What remains is not the compiler
+binary but the environment it needs in order to compile something — a filesystem
+holding the standard library and the sources, and `lld` to link what it emits.
+That is the same problem `public/wasi-preview1.js` solves for running programs,
+one level up.
 
 | Blocker | State |
 | --- | --- |
@@ -49,8 +65,8 @@ sufficient for a real consumer. What is left is a build, not a discovery.
 | `Process.executable_path` block type in `config.cr` | patched for wasm |
 | `crt1` `_start` clash | link with `-nostartfiles` — Crystal defines its own `_start` |
 | `dlopen`/`dlclose`/`dlsym`/`dlerror` (libdl.a is empty on WASI) | stubbed in the libLLVM compat layer |
-| **PCRE** for `Regex` | **next: build a wasm `libpcre`** (the build selected the PCRE1 engine; `-Duse_pcre2` would select PCRE2, needing a wasm `libpcre2-8`) |
-| Runtime host (filesystem + lld) | not yet reached |
+| PCRE for `Regex` | done: `build-pcre2.sh` cross-builds PCRE2 for wasm, and Crystal is compiled with `-Duse_pcre2` |
+| Runtime host (filesystem + lld) | not yet reached — the compiler runs, but cannot yet read sources |
 
 Every source edit is in `apply-patches.py` and idempotent, so a Crystal version
 bump fails loudly at the first drift rather than building something subtly wrong.
