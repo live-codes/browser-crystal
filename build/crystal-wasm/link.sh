@@ -32,6 +32,7 @@ if [ -n "$PCRE_LIB" ]; then
 fi
 
 "$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles \
+  -Wl,-z,stack-size=33554432 \
   -o "$OUT/crystal.wasm" \
   "$OUT/crystal.o.wasm" "$OUT/compat.o" $LIBS $PCRE_FLAGS \
   -lc++ -lc++abi \

@@ -140,6 +140,29 @@ EXEC_PATH_NEW = """    def self.exec_path : String
       end
     end"""
 
+# Crystal 1.17's WASI event loop leaves file open() as a NotImplementedError, so
+# a Crystal program on wasm cannot read a file at all -- which a compiler must.
+# The other event loops (see event_loop/polling.cr) all open with `LibC.open`;
+# WASI can too, because wasi-libc implements open(2) over path_open against the
+# preopened directories. WASI has no O_CLOEXEC and no way to change blocking
+# mode after the fact, so the flags go through untouched and the descriptor is
+# reported blocking (which is what it is).
+WASI_OPEN_OLD = """  def open(filename : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
+    raise NotImplementedError.new("Crystal::Wasi::EventLoop#open")
+  end"""
+
+WASI_OPEN_NEW = """  def open(filename : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
+    filename.check_no_null_byte
+
+    fd = LibC.open(filename, flags, permissions)
+    return Errno.value if fd == -1
+
+    # A descriptor from a WASI filesystem is blocking; there is no non-blocking
+    # mode to switch to, so the caller is told what is true rather than what was
+    # asked for.
+    {fd, true}
+  end"""
+
 PATCHES = [
     ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW),
     ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW),
@@ -147,6 +170,7 @@ PATCHES = [
     ("compiler/crystal/ffi/lib_ffi.cr", FFI_ABI_OLD, FFI_ABI_NEW),
     ("process/status.cr", STATUS_SIGNAL_OLD, STATUS_SIGNAL_NEW),
     ("compiler/crystal/config.cr", EXEC_PATH_OLD, EXEC_PATH_NEW),
+    ("crystal/event_loop/wasi.cr", WASI_OPEN_OLD, WASI_OPEN_NEW),
 ]
 
 

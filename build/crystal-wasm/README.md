@@ -83,34 +83,42 @@ PCRE2 (its `build/Dockerfile` does it) if PCRE2 is the one wanted.
 
 ### After PCRE
 
-The compiler binary is done; what it needs to *compile something* is not. A page
-where you edit and run Crystal needs a WASI filesystem host, the standard library
-as an asset, and a wasm `lld` to link the object the compiler emits. That work
-started on the fastest path — reusing `clang-wasm`'s toolchain to provide the
-WASI filesystem — and reached a precise blocker:
+The compiler binary is done; what it needs to *compile something* is not. Working
+the fastest path — reusing `clang-wasm`'s toolchain for the WASI filesystem —
+`try-compile.mjs` runs the real compiler against the real stdlib, and each step is
+recorded:
+
+1. **`Crystal::EventLoop::Wasi#open` was a `NotImplementedError` stub**, so a
+   Crystal program on wasm could not open a file at all — which a compiler must.
+   Patched (`apply-patches.py`): `open` over `LibC.open`, which wasi-libc resolves
+   against the preopened directories, exactly as every other event loop does. The
+   compiler now reads its sources.
+2. **The default wasm stack is 64 KiB.** Semantic analysis overflowed it —
+   `memory access out of bounds` inside a recursive `MathInterpreter`. The link now
+   passes `-z stack-size=33554432`.
+3. **Then exceptions.** The compiler parses the standard library, enters macro
+   interpretation, and `{% skip_file %}` raises `Crystal::SkipMacroException` —
+   which cannot unwind on wasm:
 
 ```
 RuntimeError: unreachable
-  at *raise<NotImplementedError>
-  at *Crystal::EventLoop::Wasi#open
-  at *Crystal::System::File::open
-  at File::read
-  at *Crystal::Command#gather_sources
+  at *raise<Crystal::SkipMacroException>
+  at *Crystal::MacroInterpreter#interpret_skip_file
+  at *Crystal::MacroInterpreter#interpret_top_level_call?
 ```
 
-`try-compile.mjs` runs the whole chain: the 94 MB compiler instantiates in the
-WASI host, runs, parses `build --cross-compile --target=wasm32-unknown-wasi`, and
-reaches `File.read("main.cr")` — where **Crystal 1.17's own WASI file layer stops**.
-`Crystal::EventLoop::Wasi#open` is a `NotImplementedError` stub, so a Crystal
-program on wasm cannot open a file, and a compiler must. Everything under it —
-our libLLVM, the link, the toolchain, the filesystem host, argv, output capture —
-works; the gap is inside Crystal's stdlib.
+That is §4 of FINDINGS again, now at the compiler level: **Crystal's exceptions do
+not work on `wasm32-wasip1`**, and the compiler uses them for ordinary control
+flow. Crystal 1.17's codegen has no wasm exception model —
+`compiler/crystal/codegen/exception.cr` handles Itanium, Windows and Mach-O
+personalities only — so this is a compiler (upstream) feature, not a stdlib patch.
+wasi-sdk even ships the runtime half: the `eh` sysroot
+(`share/wasi-sysroot/lib/wasm32-wasip1/eh/libc++abi.a`, `libunwind.a`).
 
-So the next workstream is **Crystal's WASI file I/O**: implement
-`Crystal::EventLoop::Wasi#open`/`read`/`write`/`seek`/`close` over the WASI
-`path_open`/`fd_read`/`fd_write`/`fd_seek`/`fd_close` calls (Crystal already binds
-them for other platforms). After that: the lld step, the stdlib/sysroot assets, and
-the page itself.
+**So the remaining blocker to a fully in-browser Crystal compiler is Crystal
+gaining wasm exception handling.** Everything beneath it is done — libLLVM, PCRE,
+the link, the filesystem host, and the compiler running, reading sources, parsing
+and reaching semantic analysis.
 
 ## Compiling on the page — what is still needed
 
@@ -118,10 +126,12 @@ the page itself.
 | --- | --- |
 | The compiler as wasm | done — `crystal.wasm`, runs |
 | A WASI filesystem host | done on the prototype path — `clang-wasm`'s toolchain (memfs), via `try-compile.mjs` |
-| Crystal's WASI file I/O | **missing — Crystal 1.17 stubs `EventLoop::Wasi#open`** |
+| Crystal's WASI file `open` | patched — the compiler reads sources |
+| Stack size for deep recursion | patched at link — 32 MiB |
+| **Exceptions on `wasm32-wasip1`** | **missing — Crystal's codegen has no wasm exception model** |
 | wasm `lld` to link the emitted object | available from `clang-wasm`, not yet wired |
 | stdlib (1552 `.cr`, 15 MB) + wasm sysroot as assets | collected, not yet shipped |
-| The page: editable editor → compile → link → run | not started; needs the two rows above |
+| The page: editable editor → compile → link → run | blocked on the exceptions row |
 
 ## Reproduce
 
