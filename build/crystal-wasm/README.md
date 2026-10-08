@@ -243,11 +243,22 @@ verifying the module** (`rc=11`):
 LLVMVerifyModule → llvm::Value::print → SIGSEGV
 ```
 
-So the pad is invalid, and `[LLVM::Value.null]` is evidently not how LLVM's C API
-wants a catch-all expressed — `LLVMAddClause` is being handed a null *ValueRef*.
-The patch now passes a null `i8*` constant (`llvm_context.int8.pointer.null`)
-instead, which is how LLVM's own IR spells a catch-all; that run's outcome is the
-next thing to look at in `round.log`.
+So the pad was invalid. Two things were wrong, both now fixed and both named by
+LLVM's verifier once it stopped segfaulting:
+
+1. **The catch-all clause** was a null *ValueRef*; it is now a null `i8*` constant
+   (`llvm_context.int8.pointer.null`), which is how LLVM's own IR spells it.
+2. **The type-id load** used the pointer type where the value type was meant —
+   `load llvm_typer.type_id_pointer, …` loads a *pointer*, and the verifier said so
+   exactly:
+
+```
+Both operands to ICmp instruction are not of the same type!
+  %7 = icmp eq i32 %6, ptr %5
+ i32  %9 = call i1 @"~match<IO::Error+>"(ptr %8)
+```
+
+   It loads `llvm_context.int32` now, which is what `~match<…>` and the `icmp` want.
 
 Everything else is ready: the bootstrap builds, the cross-compile runs with the
 patched compiler, and the link resolves (only a benign `_Unwind_SetIP` signature

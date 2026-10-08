@@ -310,7 +310,7 @@ CODEGEN_RESCUE_NEW = """      else
         set_current_debug_location node if @debug.line_numbers?
         caught_exception_ptr = call get_exception_fun, [get_exception_arg]
         caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
-        exception_type_id = wasm_target ? load(llvm_typer.type_id_pointer, caught_exception) : extract_value(lp, 1)
+        exception_type_id = wasm_target ? load(llvm_context.int32, caught_exception) : extract_value(lp, 1)
       end"""
 
 CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
