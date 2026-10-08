@@ -229,6 +229,31 @@ used. Two things it needs, which the first attempt ran into:
 
 ## Compiling on the page — what is still needed
 
+### Latest state: the catch-all clause, and a verifier crash
+
+The codegen patch now branches on `@program.target_machine.triple` (a **runtime**
+check). That mattered: the first version used `{% if flag?(:wasm32) %}`, which is
+evaluated when the *compiler is built*, so a natively-built `crystal-native`
+compiled the else branch and kept emitting clause-less pads.
+
+With a real catch-all clause the bootstrapped compiler now **crashes while
+verifying the module** (`rc=11`):
+
+```
+LLVMVerifyModule → llvm::Value::print → SIGSEGV
+```
+
+So the pad is invalid, and `[LLVM::Value.null]` is evidently not how LLVM's C API
+wants a catch-all expressed — `LLVMAddClause` is being handed a null *ValueRef*.
+The patch now passes a null `i8*` constant (`llvm_context.int8.pointer.null`)
+instead, which is how LLVM's own IR spells a catch-all; that run's outcome is the
+next thing to look at in `round.log`.
+
+Everything else is ready: the bootstrap builds, the cross-compile runs with the
+patched compiler, and the link resolves (only a benign `_Unwind_SetIP` signature
+warning, from libunwind's wasm `_Unwind_SetIP` returning void where Crystal's
+binding says `SizeT`).
+
 | Piece | State |
 | --- | --- |
 | The compiler as wasm | done — `crystal.wasm`, runs |

@@ -296,7 +296,9 @@ CODEGEN_RESCUE_NEW = """      else
         # when the compiler is built, so a natively-built compiler would take the else branch.
         wasm_target = @program.target_machine.triple.starts_with?("wasm32")
         lp_ret_type = llvm_typer.landing_pad_type
-        clauses = wasm_target ? [LLVM::Value.null] : [] of LLVM::Value
+        # A catch-all clause is a null i8* constant, as LLVM's own IR spells it;
+        # passing a null ValueRef instead leaves the pad invalid.
+        clauses = wasm_target ? [llvm_context.int8.pointer.null] : [] of LLVM::Value
         lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
         unwind_ex_obj = extract_value lp, 0
 
@@ -317,7 +319,7 @@ CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
 
 CODEGEN_ENSURE_NEW = """          lp_ret_type = llvm_typer.landing_pad_type
           # As in the rescue pad: a wasm target needs a clause or it rethrows.
-          clauses = @program.target_machine.triple.starts_with?("wasm32") ? [LLVM::Value.null] : [] of LLVM::Value
+          clauses = @program.target_machine.triple.starts_with?("wasm32") ? [llvm_context.int8.pointer.null] : [] of LLVM::Value
           lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
           unwind_ex_obj = extract_value lp, 0"""
 
