@@ -347,19 +347,20 @@ and was not.
 compiles the code, so the fix required a **patched compiler binary** — the host compiler rebuilt
 from source (`bootstrap.sh`) and then used to cross-compile.
 
-**It works, in the host.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints `caught: boom` /
-`done`; the wasm compiler compiles a program; and — with no host tool — clang-wasm's `lld.wasm`
-links the object it emits and the result runs (`hello from the wasm Crystal compiler`; see
-`try-compile.mjs` and `try-link.mjs`). The compiler must be built `--release`: the debug build
-needs ~1.2 MB of V8's *native* stack and a browser gives ~1 MB and cannot be raised, while the
-optimized build fits in 700 KB. The full detail — including the two-stacks trap (Crystal's
-linear stack vs V8's native stack, and why `-z stack-size` cannot fix a `RangeError`) — is in
+**It works, in the host and in a browser.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints
+`caught: boom` / `done`; the wasm compiler compiles a program; and — with no host tool — clang-wasm's
+`lld.wasm` links the object it emits and the result runs. [`public/demo.html`](public/demo.html) puts
+the whole chain behind an editor: edit, press Run, and the compiler, the linker and the program all
+run in the tab (~12 s a compile, verified in headless Chrome). The compiler must be built
+`--release`: the debug build needs ~1.2 MB of V8's *native* stack and a browser gives ~1 MB and
+cannot be raised, while the optimized build fits in 700 KB. The full detail — including the
+two-stacks trap (Crystal's linear stack vs V8's native stack, and why `-z stack-size` cannot fix a
+`RangeError`) — is in
 [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**Still to do:** ship the assets the page needs (the stdlib, and the `eh/` sysroot libraries —
-clang-wasm's own sysroot deliberately omits them), and build the page itself — an editable
-editor that compiles, links and runs. The two hard pieces of the pipeline already work in the
-host; what remains is the UI and the payload.
+**Still to do:** make the payload shippable — it is ~115 MB uncompressed (an 80 MB compiler, a 21 MB
+linker, a 10 MB stdlib and the sysroot archives), so gzip and trimming the stdlib to what a page
+actually needs. The pipeline itself is proved, end to end, in the browser.
 
 **The honest headline.** The question this document opened with — can Crystal's compiler run in
 a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the

@@ -17,3 +17,9 @@ __pycache__/
 # Outputs of verify/run-probe.sh (regenerated on every verify)
 build/llvm-wasm/verify/*.o
 build/llvm-wasm/verify/*.wasm
+
+# The in-browser demo's payload (build/crystal-wasm/demo-assets.sh): an 80 MB
+# compiler, a 21 MB linker, a 10 MB stdlib and the sysroot archives. Too large to
+# commit; regenerate with `npm run demo:assets` (Linux or WSL). public/vendor/ is
+# small and committed, so the page itself needs no build step.
+public/crystal-demo/

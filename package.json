@@ -8,8 +8,10 @@
   "scripts": {
     "build": "node build/build-samples.mjs",
     "build:llvm-wasm": "bash build/llvm-wasm/build.sh",
+    "demo:assets": "bash build/crystal-wasm/demo-assets.sh",
     "start": "node serve.mjs",
     "test": "node --no-warnings test/run-samples.mjs",
-    "check": "node --check serve.mjs && node --check build/build-samples.mjs && node --check test/run-samples.mjs && node --check public/wasi-preview1.js && node --check public/crystal-worker.js"
+    "test:demo": "node --experimental-wasm-exnref test/demo.mjs",
+    "check": "node --check serve.mjs && node --check build/build-samples.mjs && node --check test/run-samples.mjs && node --check test/demo.mjs && node --check public/wasi-preview1.js && node --check public/crystal-worker.js && node --check public/crystal-demo.js && node --check public/demo-worker.js"
   }
 }

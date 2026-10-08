@@ -1,139 +1,142 @@
 # browser-crystal
 
-Run **real Crystal in the browser** — the programs in `samples/` are compiled to WebAssembly and
-executed in the tab, with no server, no upload, and no cross-origin isolation headers.
+Run **real Crystal in the browser**. The interesting page is
+[`public/demo.html`](public/demo.html): edit the source, press Run, and the whole toolchain runs
+in the tab —
 
-It is a proof of concept for adding a `crystal` language to [LiveCodes](https://livecodes.io), in the
-same shape as [`browser-cobol`](https://github.com/live-codes/browser-cobol) and
-[`browser-nim`](https://github.com/live-codes/browser-nim) are for theirs.
+```
+your Crystal source
+  → crystal.wasm        the Crystal compiler, built for wasm32-wasip1   → wasm object
+  → lld.wasm            LLVM's linker, run as `wasm-ld`                 → WASI module
+  → the module          your program                                    → output
+```
 
-**Read this before the rest:** this page *runs* Crystal; it cannot *compile* it. Crystal's compiler
-is self-hosted, links LLVM and shells out to a linker, and no build of it exists for WebAssembly — so
-the samples are compiled before the page is served, and the editor is read-only. That is not a
-shortcut, it is the state of the ecosystem, and it means Crystal does not currently meet
-LiveCodes' own "[compiler that runs client-side](https://livecodes.io/docs/contribution/adding-languages/)"
-criterion. The reasoning and the evidence are in [FINDINGS.md](FINDINGS.md) §2; the short version is
-that the missing piece is an upstream artifact, not an integration.
+No server compiles anything, nothing is uploaded, and no cross-origin isolation is required. The
+standard library is fetched as data.
 
-<p align="center"><img src="docs/screenshot.png" alt="The page after running the first sample" width="1000"></p>
+It began as a proof of concept for adding a `crystal` language to [LiveCodes](https://livecodes.io),
+in the same shape as [`browser-cobol`](https://github.com/live-codes/browser-cobol) and
+[`browser-nim`](https://github.com/live-codes/browser-nim) are for theirs — and getting there
+required work that existed nowhere else:
 
-## Where the work stands
+- **a libLLVM for `wasm32-wasip1`** — Crystal links LLVM, and no wasm build of it existed to
+  download. It does now: [`build/llvm-wasm/`](build/llvm-wasm/), 99 archives, verified.
+- **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
+  every source edit in one idempotent `apply-patches.py`.
+- **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
+  codegen patch plus one LLVM option the C API cannot set. See
+  [build/crystal-wasm/README.md §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-This page is still the original proof of concept: it *runs* precompiled Crystal and cannot
-compile what you type. The effort to change that is tracked separately —
-
-- **[HANDOFF.md](HANDOFF.md)** — current state, the environment, the exact next task, and
-  everything learned the hard way. **Start here if you are picking this up.**
-- [FINDINGS.md](FINDINGS.md) §9 — libLLVM built for `wasm32-wasip1`, verified.
-- [FINDINGS.md](FINDINGS.md) §10 — the Crystal compiler: it builds, links, runs and reads the
-  standard library; exceptions on wasm are the remaining blocker.
+[FINDINGS.md](FINDINGS.md) is the narrative; [HANDOFF.md](HANDOFF.md) is the state of the work and
+everything learned the hard way — **start there if you are picking this up**.
 
 ## Run it
 
 ```bash
-npm start          # → http://localhost:8127/
-npm test           # run every sample under Node's WASI
+npm run demo:assets   # once — build the demo's payload (Linux or WSL; ~115 MB)
+npm start             # → http://localhost:8127/demo.html
 ```
 
-There is no `npm install` — the repo has no dependencies. The built modules are committed, so
-`npm start` is all you need; `npm run build` (which does need Docker) recompiles them.
+`npm run demo:assets` collects the compiler, the linker, the standard library and the sysroot
+archives into `public/crystal-demo/`, which is gitignored — they are far too large to commit, and
+building them is a long pipeline whose result is reproducible. Without them the demo loads and
+reports what is missing; the samples page works either way.
 
 A static server is required — ES modules and Workers do not load over `file://` — but it is a plain
-file server, and nothing is compiled by it. `serve.mjs` also sends `Content-Type: application/wasm`,
-without which `WebAssembly.compileStreaming` refuses the response.
+file server and compiles nothing. `serve.mjs` sends `Content-Type: application/wasm`, without which
+`WebAssembly.compileStreaming` refuses the response.
+
+There is no `npm install`: the page has no dependencies, and the one piece of third-party host code
+(the WASI shim) is vendored into `public/vendor/`.
+
+## The demo
+
+<p align="center"><img src="docs/demo.png" alt="The demo page after compiling and running the exceptions sample: the editor on the left, and on the right the compiler's and linker's dimmed output followed by 5, caught: cannot divide 1 by zero, done" width="1000"></p>
+
+`public/demo.html` is an editable editor over one worker. Everything slow or unkillable happens in
+the worker, so Stop throws it away and the page survives it.
+
+| file | what it is |
+| --- | --- |
+| `public/demo.html` | the page: editor, Run/Stop, output, phase timings |
+| `public/demo-worker.js` | fetches and compiles the assets once, then drives a run |
+| `public/crystal-demo.js` | compile → link → run, in ~200 lines; the same code runs in Node |
+| `public/vendor/browser_wasi_shim/` | the WASI host, and the filesystem the compiler needs |
+
+First run is slow — it downloads ~115 MB and compiles an 80 MB wasm module — and later runs reuse
+the compiled modules. On this machine a compile is ~12 s total (11.9 s compiling, 0.1 s linking),
+measured in headless Chrome.
+
+`public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
+smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
+still there because it is the cheap path — no assets to build, and it runs Crystal on a plain
+origin.
 
 ## What works
 
-The samples are not toys; between them they exercise a real slice of the language, all of it verified
-in headless Chrome with `crossOriginIsolated === false`:
+Verified in headless Chrome with `crossOriginIsolated === false`:
 
-| sample | covers |
-| --- | --- |
-| **Hello, world** | strings, interpolation, `1.upto`, ranges, `%w`, `#sum` |
-| **Arrays, hashes and blocks** | `sort`/`sort_by`/`select`/`map`/`sum`, blocks, `Hash`, `each_char` |
-| **Classes, structs and modules** | `struct` with `getter`, `class`, `include Module`, operator overloading, method overloading, `to_s(io)` |
-| **Errors without exceptions** | `Int32?` unions, `case … when Nil`, `[]?`, `split.first?` |
-| **Reading stdin** | `gets`, over WASI `fd_read`, fed by the stdin box |
-| **Regular expressions** | `scan`, `gsub`, character classes — PCRE2, built for wasm |
-
-Program output is streamed as it is produced, and the program runs in a Worker, so a page-breaking
-program can be stopped by throwing the Worker away.
+- **Compiling and running what you type**, in the tab — including `begin`/`rescue`/`ensure`, which
+  is what the exception work was for. `test/demo.mjs` checks the same code path under Node.
+- **The precompiled samples** (`public/index.html`): strings and interpolation, arrays/hashes/blocks,
+  structs/classes/modules/operator overloading, `Int32?` unions and `case … when Nil`, `gets` over
+  `fd_read`, and `Regex` (PCRE2, built for wasm).
+- Program output streams as it is produced, and programs run off the main thread.
 
 ## What does not work
 
 | | why |
 | --- | --- |
-| **Compiling what you type** | there is no Crystal compiler for WebAssembly — see [FINDINGS.md](FINDINGS.md) §2. This is the big one. |
-| **Compiler diagnostics** | nothing in the page can parse Crystal, so there is nothing to report. |
-| **`begin`/`rescue`/`ensure`, `raise`** | exceptions trap with `unreachable` in every build mode; Crystal has no unwinder on this target. §4 |
-| **Files, clocks, threads, `fork`, subprocesses** | WASI preview 1 here has no filesystem, and only eight WASI calls are implemented at all. §5 |
-| **Crystal newer than 1.17** | the wasm target does not compile on 1.21.0, the current release. §3 |
-| **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a sample, not for a service. §1 |
-
-## How it works
-
-```
-samples/*.cr
-  → crystal build --cross-compile --target wasm32-unknown-wasi   → wasm object     (build/Dockerfile)
-  → wasm-ld <object> -lc -L<wasi-sysroot> -lpcre2-8              → WASI module
-  → WebAssembly.compileStreaming + public/wasi-preview1.js       → output          (in the tab)
-```
-
-Crystal's cross-compile stops at the object and *prints* the link command it would have run; the
-official image ships neither `wasm-ld` nor a WASI sysroot, so `build/Dockerfile` adds `wasi-sdk` and
-builds PCRE2 for wasm. Three details that are easy to get wrong are recorded in
-[FINDINGS.md](FINDINGS.md) §1 — that wasm32 picks the no-GC allocator by itself, that `Regex` needs a
-wasm PCRE2, and that the result is an ordinary WASI command module.
-
-On the page side the whole host contract is **eight functions**, which is everything a Crystal
-program asked for across every sample:
-
-```
-args_sizes_get  args_get  fd_fdstat_get  fd_fdstat_set_flags
-fd_read  fd_write  proc_exit  random_get
-```
-
-| file | what it is |
-| --- | --- |
-| `public/wasi-preview1.js` | the WASI host — ~120 lines, no dependencies |
-| `public/crystal-worker.js` | runs one module off the main thread |
-| `public/index.html` | the page: samples, run/stop, output, stdin |
-| `build/Dockerfile` | Crystal 1.17.0 + wasi-sdk 22 + PCRE2 10.42 |
-| `build/build-samples.sh` | cross-compile and link, one sample at a time |
-| `build/build-samples.mjs` | drives Docker and writes `public/crystal/samples.json` |
-
-The page exposes `document.documentElement.dataset` (`status`, `stage`, `runs`, `exitCode`, `ms`,
-`sample`) and its element ids as globals, so scripted checks can read state without string literals.
+| **A browser-sized first load** | the compiler is 80 MB because it is the whole compiler and the whole standard library compiled to wasm; gzip helps, but this is a demo, not a distribution |
+| **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
+| **`Regex` in a compiled program** | it needs `libpcre2-8.a`, which the demo links — but only because the toolchain list says so; a program that ships its own shims can get further than the samples page does |
+| **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |
+| **Crystal newer than 1.17** | the wasm target does not compile on 1.21.0, the then-current release. §3 |
+| **Anything needing the browser to raise its stack** | V8 gives a wasm instance ~1 MB of native stack and a page cannot raise it, so the compiler is built `--release` (optimized frames fit in 700 KB); a debug build does not. [README §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works) |
 
 ## Verifying
 
 | what | command |
 | --- | --- |
-| run every sample (Node's WASI, not the page's) | `npm test` |
-| syntax-check the server, build script and client modules | `npm run check` |
-| rebuild the wasm modules | `npm run build` |
-| serve the page | `npm start` → http://localhost:8127/ |
+| the demo's compile → link → run, under Node | `npm run test:demo` |
+| every precompiled sample (Node's WASI) | `npm test` |
+| syntax-check the server and client modules | `npm run check` |
+| rebuild the demo's payload | `npm run demo:assets` |
+| serve the pages | `npm start` → http://localhost:8127/ |
 
-`npm test` is worth running rather than trusting: it uses Node's WASI implementation, which is a
-different host from `public/wasi-preview1.js`, so it checks the artifacts themselves — and it prints
-the union of WASI imports, which is what the host has to keep up with.
+`npm run test:demo` is the one that matters for the demo: the page's core has no browser-only API,
+so the whole chain is checked in Node against the same assets the page fetches. What the browser
+adds is asset loading and the UI.
+
+## Layout
+
+```
+public/            the pages and their hosts
+build/llvm-wasm/   libLLVM for wasm32-wasip1 (committed output, ~140 MB, on purpose)
+build/crystal-wasm/ the compiler pipeline, the demo payload, and the lld/exception notes
+build/             the original Docker-based sample pipeline
+samples/           the precompiled samples' Crystal source
+```
 
 ## Licensing and provenance
 
 MIT for the code here, and for the Crystal standard library that ends up inside the modules
 (Crystal is Apache-2.0; the compiled artifacts embed its runtime).
 
-- **Crystal 1.17.0** — Apache-2.0 — via `crystallang/crystal:1.17.0`. Pinned deliberately; see
-  [FINDINGS.md](FINDINGS.md) §3.
-- **wasi-sdk 22** (`wasm-ld`, wasi-libc) — Apache-2.0 WITH LLVM-exception / MIT — for the linker and
-  the sysroot the Crystal compiler does not supply.
-- **PCRE2 10.42** — BSD-3-Clause — built for wasm32-wasi, for `Regex`.
-- `public/wasi-preview1.js` is written here rather than vendored, so there is no third-party host
-  code in the repo.
+- **Crystal 1.17.0** — Apache-2.0 — the compiler's own source, patched by `apply-patches.py`.
+- **LLVM 20.1.8** — Apache-2.0 WITH LLVM-exception — built for wasm32-wasip1 in `build/llvm-wasm/`.
+- **wasi-sdk 33** (clang, wasm-ld's libraries, the sysroot) — Apache-2.0 WITH LLVM-exception / MIT.
+- **PCRE2** — BSD-3-Clause — built for wasm32-wasi, for `Regex`.
+- **`lld.wasm`** comes from [`clang-wasm`](https://github.com/live-codes/clang-wasm) (LLVM 22,
+  Apache-2.0 WITH LLVM-exception); `build/crystal-wasm/demo-assets.sh` copies it in.
+- **`@bjorn3/browser_wasi_shim`** v0.4.2 — MIT OR Apache-2.0 — vendored into `public/vendor/`, with
+  its licence files, as the compiler's WASI host.
+
+`public/wasi-preview1.js` is written here rather than vendored, so the samples page has no
+third-party host code in it at all.
 
 ## Status
 
-Spike complete. The runtime side is proven and small; the compiler side is blocked upstream, which is
-why this is a proof of concept rather than a language module. Next steps, if it is picked up again,
-are in [FINDINGS.md](FINDINGS.md) §7 — and they start with watching the two upstream signals in §3
-and §2 rather than with more work here.
+The question this repository opened with — *can Crystal's compiler run in a browser* — is answered:
+it does. What is left is on the demo's side, not the compiler's: a payload small enough to ship, and
+sizing the standard library to what a page actually needs. [HANDOFF.md](HANDOFF.md) §7 has the list.

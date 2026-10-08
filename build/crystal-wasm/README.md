@@ -437,7 +437,30 @@ The libraries are the ones clang's driver passes under `-fwasm-exceptions`, and
 the **`eh/` variants matter**: `libunwind.a`'s `_Unwind_RaiseException` is a real
 `wasm throw` and libc++abi supplies `__gxx_wasm_personality_v0`. clang-wasm's own
 bundled sysroot deliberately excludes `eh/` (it builds a non-EH libc++), so those
-came from wasi-sdk-33 directly — they are the sysroot assets the page must ship.
+came from wasi-sdk-33 directly.
+
+## The demo — the whole chain behind an editor
+
+`public/demo.html` is this pipeline as a page you can type into:
+
+```
+public/demo.html        the editor, Run/Stop, output, phase timings
+public/demo-worker.js   fetches and compiles the assets once, then drives a run
+public/crystal-demo.js  compile → link → run; no browser-only API
+public/vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs
+```
+
+`demo-assets.sh` collects what it fetches into `public/crystal-demo/` (gitignored):
+`compiler.wasm`, `lld.wasm`, `stdlib.json` (the patched stdlib, 1606 files) and
+`lib/…` (the sysroot archives, PCRE2, clang_rt). ~115 MB uncompressed.
+
+`public/crystal-demo.js` is deliberately the same logic as `try-compile.mjs` +
+`try-link.mjs`, but expressed once and with no Node API — so `test/demo.mjs` runs
+the exact code the page runs, against the exact assets it fetches. The page's
+worker adds only fetching, caching the compiled modules, and the protocol.
+
+Verified in headless Chrome with `crossOriginIsolated === false`, ~12 s a compile
+(11.9 s compiling, 0.1 s linking), including `begin`/`rescue`/`ensure`.
 
 ## Reproduce
 

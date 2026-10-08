@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crystal in the browser — compile it yourself</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --line: #8883;
+    --dim: #888;
+    --ok: #2f9e44;
+    --err: #d0334a;
+    --busy: #b8860b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         font: 14px/1.5 system-ui, sans-serif; }
+
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .note { color: var(--dim); font-size: 12.5px; margin-top: 6px; max-width: 92ch; }
+  .note strong { color: inherit; font-weight: 600; }
+  select, button { font: inherit; padding: 4px 10px; border-radius: 6px;
+                   border: 1px solid var(--line); background: canvas; color: inherit; }
+  button { font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  kbd { font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line);
+        border-radius: 3px; padding: 0 3px; }
+  #status { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
+  #status[data-state="ok"] { color: var(--ok); }
+  #status[data-state="bad"] { color: var(--err); }
+  #status[data-state="busy"] { color: var(--busy); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  section { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  section + section { border-left: 1px solid var(--line); }
+  h2 { margin: 0; padding: 8px 14px 4px; font-size: 11px; font-weight: 600;
+       letter-spacing: .05em; text-transform: uppercase; color: var(--dim);
+       display: flex; justify-content: space-between; }
+  h2 .meta { font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+  /* The editor: a plain textarea, deliberately. It is the one control the demo
+     needs, and it keeps the page free of a syntax-highlighting dependency. */
+  #source { flex: 1; width: 100%; resize: none; border: 0; outline: 0;
+            padding: 8px 14px 20px; background: transparent; color: inherit;
+            font: 13px/1.5 var(--mono); tab-size: 2; white-space: pre; }
+  #output { margin: 0; padding: 8px 14px 20px; overflow: auto; flex: 1;
+            font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  #output .empty { color: var(--dim); }
+  #output .err { color: var(--err); }
+  /* The compiler's and linker's own output is real, but it is not the program's
+     output: it is dimmed so the program's is what you read. */
+  #output .build { color: var(--dim); }
+  #output .build.err { color: #b0646f; }
+  #output .diag { color: var(--err); opacity: .85; font-size: 12.5px; }
+
+  footer { border-top: 1px solid var(--line); padding: 6px 14px; font-size: 12px;
+           color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; }
+  footer code { font: 12px var(--mono); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Crystal in the browser</h1>
+    <select id="sample" aria-label="Sample"></select>
+    <button id="run">Compile &amp; run <kbd>Ctrl+Enter</kbd></button>
+    <button id="stop" disabled>Stop</button>
+    <span id="status">ready</span>
+  </div>
+  <p class="note">
+    Edit the source and press Run. <strong>Everything below happens in this tab</strong>: the
+    Crystal compiler, the linker and the program are all WebAssembly, and the standard library
+    is fetched as data — no server compiles anything and your code is never uploaded. The first
+    run is slow: it downloads an 80 MB compiler and compiles it.
+  </p>
+</header>
+
+<main>
+  <section>
+    <h2>main.cr <span class="meta" id="editor-meta"></span></h2>
+    <textarea id="source" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+  </section>
+  <section>
+    <h2>Output <span class="meta" id="output-meta"></span></h2>
+    <pre id="output"><span class="empty">Press Compile &amp; run.</span></pre>
+  </section>
+</main>
+
+<footer>
+  <span>compiler <code>crystal.wasm</code></span>
+  <span>linker <code>lld.wasm</code></span>
+  <span>runtime <code>browser_wasi_shim</code></span>
+  <span id="timings"></span>
+</footer>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const source = $('source'), output = $('output'), status = $('status');
+const samplePicker = $('sample'), runButton = $('run'), stopButton = $('stop');
+const timings = $('timings'), outputMeta = $('output-meta'), editorMeta = $('editor-meta');
+// Element ids as globals, so scripted checks can drive the page without string
+// literals. `status` is left out on purpose — window.status is a legacy built-in.
+Object.assign(window, { source, output, samplePicker, runButton, stopButton, timings });
+
+const state = document.documentElement.dataset;
+// A first run has to fetch and compile ~100 MB of wasm before it can start, and
+// the compile itself can take a while; this is a runaway guard, not a compile
+// budget.
+const RUN_TIMEOUT_MS = 300000;
+
+const SAMPLES = [
+	{
+		title: 'Hello',
+		source: `puts "hello from Crystal, compiled in your browser"\n`
+	},
+	{
+		title: 'Exceptions',
+		source: `def divide(a, b)
+  raise ArgumentError.new("cannot divide #{a} by zero") if b.zero?
+  a // b
+end
+
+begin
+  puts divide(10, 2)
+  puts divide(1, 0)
+rescue ex : ArgumentError
+  puts "caught: #{ex.message}"
+ensure
+  puts "done"
+end
+`
+	},
+	{
+		title: 'Iterators and structs',
+		source: `struct Point
+  getter x : Int32
+  getter y : Int32
+
+  def initialize(@x : Int32, @y : Int32)
+  end
+
+  def +(other : Point)
+    Point.new(x + other.x, y + other.y)
+  end
+
+  def to_s(io : IO) : Nil
+    io << "(#{x}, #{y})"
+  end
+end
+
+points = (1..5).map { |i| Point.new(i, i * i) }
+puts points.reduce(Point.new(0, 0)) { |sum, point| sum + point }
+puts points.map(&.to_s).join(", ")
+`
+	}
+];
+
+let worker = null;
+let busy = false;
+let watchdog = 0;
+let startedAt = 0;
+
+state.runs = '0';
+setState('idle', 'ready');
+
+function setState(value, text) {
+  state.status = value;
+  status.dataset.state = value === 'ok' ? 'ok' : value === 'error' ? 'bad' : value === 'idle' ? '' : 'busy';
+  status.textContent = text;
+}
+
+function append(kind, text, stage) {
+  const span = document.createElement('span');
+  const classes = [];
+  if (kind === 'stderr') classes.push('err');
+  if (stage && stage !== 'running') classes.push('build');
+  span.className = classes.join(' ');
+  span.textContent = text;
+  output.append(span);
+  output.scrollTop = output.scrollHeight;
+}
+
+function clearOutput() {
+  output.textContent = '';
+}
+
+function makeWorker() {
+  const next = new Worker('./demo-worker.js', { type: 'module' });
+  next.addEventListener('message', ({ data }) => onMessage(data));
+  next.addEventListener('error', (event) => {
+    finish();
+    setState('error', `worker error: ${event.message || 'unknown'}`);
+  });
+  return next;
+}
+
+function onMessage(message) {
+  switch (message.type) {
+    case 'phase':
+      state.stage = message.phase;
+      setState('running', `${message.phase}… ${((performance.now() - startedAt) / 1000).toFixed(1)}s`);
+      break;
+
+    case 'stdout':
+      append('stdout', message.text, message.stage);
+      break;
+
+    case 'stderr':
+      append('stderr', message.text, message.stage);
+      break;
+
+    case 'exit': {
+      clearTimeout(watchdog);
+      finish();
+      state.exitCode = String(message.exitCode);
+      const phases = Object.entries(message.phases)
+        .map(([stage, ms]) => `${stage} ${(ms / 1000).toFixed(1)}s`)
+        .join(' · ');
+      outputMeta.textContent = `${(message.ms / 1000).toFixed(1)}s total`;
+      timings.textContent = phases ? `· ${phases}` : '';
+      state.phases = phases;
+      if (message.exitCode === 0) setState('ok', `done in ${(message.ms / 1000).toFixed(1)}s`);
+      else setState('error', `exited with code ${message.exitCode}`);
+      if (!output.textContent) output.innerHTML = '<span class="empty">(no output)</span>';
+      break;
+    }
+
+    case 'error': {
+      clearTimeout(watchdog);
+      finish();
+      setState('error', message.stage ? `failed while ${message.stage}` : 'failed');
+      state.stage = 'error';
+      append('stderr', `${message.message}\n`);
+      if (message.diagnostics) {
+        const span = document.createElement('span');
+        span.className = 'diag';
+        span.textContent = message.diagnostics;
+        output.append(span);
+      }
+      break;
+    }
+  }
+}
+
+function finish() {
+  busy = false;
+  runButton.disabled = false;
+  stopButton.disabled = true;
+  state.runs = String(Number(state.runs) + 1);
+}
+
+function run() {
+  const program = source.value;
+  if (busy || !program.trim()) return;
+
+  busy = true;
+  runButton.disabled = true;
+  stopButton.disabled = false;
+  clearOutput();
+  outputMeta.textContent = '';
+  timings.textContent = '';
+  delete state.exitCode;
+  delete state.phases;
+  delete state.stage;
+  startedAt = performance.now();
+  setState('running', 'starting…');
+
+  // The worker is the only handle on a program that will not stop on its own,
+  // so the timeout throws it away and builds a fresh one.
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    worker.terminate();
+    worker = makeWorker();
+    finish();
+    setState('error', `stopped after ${RUN_TIMEOUT_MS / 1000}s`);
+  }, RUN_TIMEOUT_MS);
+
+  worker.postMessage({ type: 'run', source: program });
+}
+
+function select() {
+  const entry = SAMPLES[Number(samplePicker.value) || 0];
+  source.value = entry.source;
+  editorMeta.textContent = `${entry.source.split('\n').length} lines`;
+  clearOutput();
+  output.innerHTML = '<span class="empty">Press Compile &amp; run.</span>';
+  state.sample = entry.title;
+  setState('idle', 'ready');
+}
+
+runButton.addEventListener('click', run);
+stopButton.addEventListener('click', () => {
+  worker.terminate();
+  worker = makeWorker();
+  clearTimeout(watchdog);
+  finish();
+  setState('idle', 'stopped');
+});
+samplePicker.addEventListener('change', select);
+source.addEventListener('input', () => {
+  editorMeta.textContent = `${source.value.split('\n').length} lines`;
+});
+addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault();
+    run();
+  }
+});
+
+SAMPLES.forEach((entry, index) => {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = entry.title;
+  samplePicker.append(option);
+});
+samplePicker.value = '0';
+worker = makeWorker();
+select();
+</script>
+</body>
+</html>

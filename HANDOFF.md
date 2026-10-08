@@ -237,15 +237,18 @@ The exception blocker is closed (§6). What is left is the browser:
    **`wasm-ld`** (argv[0] dispatch), and its **LLVM 22 links our LLVM 20 object** fine. The link
    needs the **`eh/` sysroot libs** (`libunwind.a`, `libc++abi.a`, `libc++.a`) — clang-wasm's own
    bundled sysroot deliberately excludes `eh/` — so those ship with the page (§7.2).
-2. **Assets.** The Crystal stdlib is **1552 `.cr`, 15 MB** (fits clang-wasm's memfs budget of
-   4091 nodes). It has to ship with the page, plus the wasm sysroot for linking user programs
-   (`libc.a`, `libc++.a`, `libc++abi.a`, `libunwind.a` from `eh/`, `libpcre2-8.a`, the
-   `libwasi-emulated-*` archives, `libclang_rt.builtins.a`) — `try-link.mjs` lists the exact set.
-3. **The page** (`public/index.html` today = read-only pane + precompiled samples):
-   an editable editor → run the compiler (with a real filesystem) → take the emitted object →
-   link with `lld` → run it through the existing WASI host (`public/wasi-preview1.js`, which
-   has no filesystem and will need one for the compiler). `try-compile.mjs` and `try-link.mjs`
-   are the Node harnesses that already prove the whole flow.
+2. **Assets.** `build/crystal-wasm/demo-assets.sh` collects everything the demo needs into
+   `public/crystal-demo/` (gitignored): `compiler.wasm`, `lld.wasm`, `stdlib.json` (the patched
+   stdlib, 1606 files) and `lib/…` — the sysroot archives from wasi-sdk-33 plus PCRE2 and
+   clang_rt. ~115 MB uncompressed; the unwritten work is making that shippable (gzip, and trimming
+   the stdlib — the page only needs the prelude and what a program requires).
+3. ~~**The page.**~~ **Done — `public/demo.html`.** An editable editor that compiles, links and
+   runs in the tab: `public/demo-worker.js` (fetches and caches the compiled modules) →
+   `public/crystal-demo.js` (compile → link → run, ~200 lines, no browser-only API, so
+   `test/demo.mjs` drives the same code in Node) → the vendored `@bjorn3/browser_wasi_shim` as the
+   WASI host and filesystem. Verified in headless Chrome (`agent-browser`), `crossOriginIsolated
+   === false`: `hello …` and the exceptions sample both correct, ~12 s per compile. `try-compile.mjs`
+   and `try-link.mjs` remain the smaller, independently-runnable proofs of each half.
 4. **`--release` is required, not optional.** `RELEASE=1 cross-compile.sh` adds `--release`
    (-O3 --single-module). It is 79 MB instead of 98 MB, but the real reason is the stack: the
    **debug** compiler needs more native stack than a browser gives (measured: `--stack-size=1000`

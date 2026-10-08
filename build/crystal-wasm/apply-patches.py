@@ -158,10 +158,10 @@ WASI_OPEN_OLD = """  def open(filename : String, flags : Int32, permissions : Fi
     raise NotImplementedError.new("Crystal::Wasi::EventLoop#open")
   end"""
 
-WASI_OPEN_NEW = """  def open(filename : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
-    filename.check_no_null_byte
+WASI_OPEN_NEW = """  def open(path : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
+    path.check_no_null_byte
 
-    fd = LibC.open(filename, flags, permissions)
+    fd = LibC.open(path, flags, permissions)
     return Errno.value if fd == -1
 
     # A descriptor from a WASI filesystem is blocking; there is no non-blocking
