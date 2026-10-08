@@ -286,16 +286,18 @@ CODEGEN_RESCUE_NEW = """      else
         # personality function in raise.cr.
         #
         # On wasm the personality is libc++abi's, not ours: WasmEHPrepare hardcodes
-        # `_Unwind_CallPersonality`, which calls `__gxx_personality_wasm0`. That one only
-        # enters the pad when a clause matches -- otherwise it rethrows and the exception
-        # escapes the module -- and it puts a clause index in the selector slot, not a type
-        # id. So wasm declares a catch-all (Crystal wants every exception and dispatches
-        # itself) and reads the type id off the exception object, which begins with it.
+        # `_Unwind_CallPersonality`, which calls `__gxx_personality_wasm0`. That one only enters
+        # the pad when a clause matches -- otherwise it rethrows and the exception escapes the
+        # module -- and it puts a clause index in the selector slot, not a type id. So a wasm
+        # target declares a catch-all (Crystal wants every exception and dispatches itself) and
+        # reads the type id off the exception object, which begins with it.
         #
-        # The branches below are expression-position macros on purpose: a declaration inside
-        # a statement-position `{% if %}` is not visible after `{% end %}`.
+        # This is a *runtime* check on the target, not `flag?(:wasm32)`: the latter is evaluated
+        # when the compiler is built, so a natively-built compiler would take the else branch.
+        wasm_target = @program.target_machine.triple.starts_with?("wasm32")
         lp_ret_type = llvm_typer.landing_pad_type
-        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, {% if flag?(:wasm32) %} [LLVM::Value.null] {% else %} [] of LLVM::Value {% end %}
+        clauses = wasm_target ? [LLVM::Value.null] : [] of LLVM::Value
+        lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
         unwind_ex_obj = extract_value lp, 0
 
         # We call __crystal_get_exception to get the actual crystal `Exception` object.
@@ -306,7 +308,7 @@ CODEGEN_RESCUE_NEW = """      else
         set_current_debug_location node if @debug.line_numbers?
         caught_exception_ptr = call get_exception_fun, [get_exception_arg]
         caught_exception = int2ptr caught_exception_ptr, llvm_typer.type_id_pointer
-        exception_type_id = {% if flag?(:wasm32) %} load llvm_typer.type_id_pointer, caught_exception {% else %} extract_value lp, 1 {% end %}
+        exception_type_id = wasm_target ? load(llvm_typer.type_id_pointer, caught_exception) : extract_value(lp, 1)
       end"""
 
 CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
@@ -314,8 +316,9 @@ CODEGEN_ENSURE_OLD = """          lp_ret_type = llvm_typer.landing_pad_type
           unwind_ex_obj = extract_value lp, 0"""
 
 CODEGEN_ENSURE_NEW = """          lp_ret_type = llvm_typer.landing_pad_type
-          # As in the rescue pad: wasm needs a clause or it rethrows.
-          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, {% if flag?(:wasm32) %} [LLVM::Value.null] {% else %} [] of LLVM::Value {% end %}
+          # As in the rescue pad: a wasm target needs a clause or it rethrows.
+          clauses = @program.target_machine.triple.starts_with?("wasm32") ? [LLVM::Value.null] : [] of LLVM::Value
+          lp = builder.landing_pad lp_ret_type, main_fun(personality_name).func, clauses
           unwind_ex_obj = extract_value lp, 0"""
 
 PATCHES = [
