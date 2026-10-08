@@ -104,21 +104,53 @@ recorded:
 RuntimeError: unreachable
   at *raise<Crystal::SkipMacroException>
   at *Crystal::MacroInterpreter#interpret_skip_file
-  at *Crystal::MacroInterpreter#interpret_top_level_call?
 ```
 
-That is §4 of FINDINGS again, now at the compiler level: **Crystal's exceptions do
-not work on `wasm32-wasip1`**, and the compiler uses them for ordinary control
-flow. Crystal 1.17's codegen has no wasm exception model —
-`compiler/crystal/codegen/exception.cr` handles Itanium, Windows and Mach-O
-personalities only — so this is a compiler (upstream) feature, not a stdlib patch.
-wasi-sdk even ships the runtime half: the `eh` sysroot
-(`share/wasi-sysroot/lib/wasm32-wasip1/eh/libc++abi.a`, `libunwind.a`).
+This is §4 of FINDINGS again, and the codegen half turns out to be *already
+possible*:
 
-**So the remaining blocker to a fully in-browser Crystal compiler is Crystal
-gaining wasm exception handling.** Everything beneath it is done — libLLVM, PCRE,
-the link, the filesystem host, and the compiler running, reading sources, parsing
-and reaching semantic analysis.
+- The WebAssembly target machine **forces** `ExceptionModel = Wasm` itself
+  (`WebAssemblyTargetMachine.cpp:430`, from `WebAssemblyMCAsmInfo.cpp:54`), so
+  nothing needs the LLVM `TargetOptions` the C API cannot set.
+- Crystal exposes `--mattr`, so the `+exception-handling` subtarget feature can be
+  asked for without patching the compiler: `cross-compile.sh` now passes
+  `--mattr=+exception-handling`.
+- wasi-sdk ships the runtime: `-fwasm-exceptions` selects the `eh` sysroot, and
+  `link.sh` adds `-lunwind` for `_Unwind_RaiseException`, `__cpp_exception` and
+  friends. That link line now resolves.
+
+**The blocker is four deliberate stubs in `src/raise.cr`.** Crystal 1.17 does not
+implement exceptions for `wasm32` at all — it prints and exits:
+
+```crystal
+{% elsif flag?(:wasm32) %}
+  fun __crystal_personality ...   # "EXITING: __crystal_personality called"; LibC.exit(1)
+  fun __crystal_raise(ex) ...     # "EXITING: __crystal_raise called";       LibC.exit(1)
+  fun __crystal_get_exception ... # "EXITING: __crystal_get_exception called"; LibC.exit(1)
+{% end %}
+
+{% if flag?(:wasm32) %}
+  def raise(exception) : NoReturn
+    Crystal::System.print_error "EXITING: Attempting to raise:\n%s\n", ...
+    LibIntrinsics.debugtrap       # <- the `unreachable` we keep hitting
+    LibC.exit(1)
+  end
+{% else %}
+  ...the real raise, excluded for wasm...
+{% end %}
+```
+
+So making the compiler work is: **implement those four for wasm32** — the
+personality, `__crystal_raise` (over `LibUnwind.raise_exception`), and
+`__crystal_get_exception`, plus the real `raise` — mirroring the non-wasm branch,
+with wasm bindings for `_Unwind_*` in `exception/lib_unwind.cr`. The surrounding
+machinery (LTB/landingpad codegen, `WasmEHPrepare`, libunwind-wasm's
+`_Unwind_CallPersonality` and `__wasm_lpad_context`) is all present and is the
+Itanium landingpad path Crystal already emits — which is why this is a real
+implementation task rather than a rewrite of the exception model.
+
+**Everything else is done** — libLLVM, PCRE, the link, the filesystem host, and
+the compiler running, reading sources, parsing and reaching semantic analysis.
 
 ## Compiling on the page — what is still needed
 

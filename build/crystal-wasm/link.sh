@@ -31,11 +31,11 @@ if [ -n "$PCRE_LIB" ]; then
   PCRE_FLAGS="-L$PCRE_LIB -lpcre2-8"
 fi
 
-"$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles \
+"$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles -fwasm-exceptions \
   -Wl,-z,stack-size=33554432 \
   -o "$OUT/crystal.wasm" \
   "$OUT/crystal.o.wasm" "$OUT/compat.o" $LIBS $PCRE_FLAGS \
-  -lc++ -lc++abi \
+  -lc++ -lc++abi -lunwind \
   -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-getpid -lwasi-emulated-process-clocks
 
 echo "link rc=$?"
