@@ -332,9 +332,9 @@ binding says `SizeT`).
 | Stack size for deep recursion | patched at link — 32 MiB (tunable: `STACK_SIZE`) |
 | **Exceptions on `wasm32-wasip1`** | **done — see "Resolution" below** |
 | Compiling a program → object | **done** — `try-compile.mjs` emits `out.o.wasm` |
-| Linking the emitted object (`lld`) | done in the harness with wasi-sdk's `wasm-ld`; the *browser* still needs `lld.wasm` |
+| Linking the emitted object (`lld`) | **done in the WASI host** — `try-link.mjs` drives clang-wasm's `lld.wasm`; its LLVM 22 links our LLVM 20 object |
 | stdlib (1552 `.cr`, 15 MB) + wasm sysroot as assets | collected, not yet shipped |
-| The page: editable editor → compile → link → run | needs the linking/UI work below |
+| The page: editable editor → compile → link → run | needs the UI, and the assets |
 
 ## Resolution — the wasm catch works
 
@@ -381,10 +381,11 @@ resolved in three parts, all in `apply-patches.py`:
      stack-size` value helps. Node's default native stack is ~1 MiB, far below the
      8 MiB a native build gets, so the transformer overflows it
      **non-deterministically** (Crystal's hashes are randomly seeded, so the
-     traversal order — and depth — varies run to run). The fix for the harness is
-     `node --stack-size=4000`; this is documented in `try-compile.mjs`. A browser
-     cannot raise this, so a page may still need a smaller-frame compiler
-     (`-Drelease`) or a less recursive transformer — see "Compiling on the page".
+     traversal order — and depth — varies run to run). The debug compiler needs
+     **more than a browser gives**: measured, `--stack-size=1000` fails and `1234`
+     passes, and a browser's V8 stack is ~1 MiB with no way to raise it. This is
+     why the page build is **`--release`**: the optimized compiler passes 5/5 even
+     at `--stack-size=700` (and is 79 MB instead of 98 MB). See below.
 
 **The reproducible end state** (all from `apply-patches.py`; see `HANDOFF.md`):
 
@@ -405,6 +406,39 @@ hello from the wasm Crystal compiler
 That is the whole pipeline: a program is compiled *by the wasm compiler*, and the
 object it emits links and runs.
 
+## Linking inside the host — the lld step
+
+The link above used the host's `clang`/`wasm-ld`. A page has neither, so
+**`try-link.mjs`** does the same link with clang-wasm's **`lld.wasm`**, run as a
+WASI command in the same host the compiler runs in — no host tool involved:
+
+```
+$ node try-link.mjs
+loading lld.wasm …
+linking with lld.wasm …
+link exitCode: 0
+out.wasm: 817734 bytes
+running the linked program in the same host …
+run exitCode: 0
+hello from the wasm Crystal compiler
+```
+
+Two things this settles:
+
+- **The linker runs in the host.** `lld.wasm` is a *generic* lld driver and
+  dispatches on `argv[0]`, so it must be told it is `wasm-ld` (the manifest
+  records `"argv0": "wasm-ld"` too). It then takes the object and the libraries
+  as its filesystem.
+- **The versions compose.** clang-wasm's lld is **LLVM 22.1.8**; our compiler (and
+  the libLLVM it links) is **LLVM 20.1.8**. Its object from LLVM 20 links with the
+  LLVM 22 linker.
+
+The libraries are the ones clang's driver passes under `-fwasm-exceptions`, and
+the **`eh/` variants matter**: `libunwind.a`'s `_Unwind_RaiseException` is a real
+`wasm throw` and libc++abi supplies `__gxx_wasm_personality_v0`. clang-wasm's own
+bundled sysroot deliberately excludes `eh/` (it builds a non-EH libc++), so those
+came from wasi-sdk-33 directly — they are the sysroot assets the page must ship.
+
 ## Reproduce
 
 Everything below runs in the `racket-build` WSL distro (Ubuntu 24.04, root). The
@@ -418,12 +452,18 @@ python3 build/crystal-wasm/apply-patches.py $OUT/src   # idempotent; safe to re-
 bash build/crystal-wasm/repro.sh                        # fast check: caught: boom / done
 
 OUT=$OUT bash build/crystal-wasm/bootstrap.sh           # native patched compiler
-CRYSTAL=$OUT/bin/crystal-native CRYSTAL_SRC=/opt/crystal-1.17.0/share/crystal/src \
+# RELEASE=1 is what the page needs (smaller frames -> fits a browser's ~1 MB
+# native stack; see "Resolution" §3). Drop it for a debug build.
+RELEASE=1 CRYSTAL=$OUT/bin/crystal-native CRYSTAL_SRC=/opt/crystal-1.17.0/share/crystal/src \
   bash build/crystal-wasm/cross-compile.sh              # crystal.o.wasm
 bash build/crystal-wasm/link.sh                         # crystal.wasm
 
-node --stack-size=4000 build/crystal-wasm/try-compile.mjs   # compiles main.cr -> out.o.wasm
+node build/crystal-wasm/try-compile.mjs                     # compiles main.cr -> out.o.wasm
+node build/crystal-wasm/try-link.mjs                        # links it in the host with lld.wasm and runs it
 ```
+
+(The `--stack-size=4000` that `try-compile.mjs` needs applies to the *debug*
+compiler; the release build runs at Node's default and is what a browser gets.)
 
 `repro.sh` is the seconds-long proxy for the compiler cycle — a three-line
 `begin`/`raise`/`rescue` through the native patched compiler. `try-compile.mjs`

@@ -231,24 +231,28 @@ deeply, and there are two different stacks:
 
 The exception blocker is closed (§6). What is left is the browser:
 
-1. **The lld step.** `try-compile.mjs` already links with wasi-sdk's `wasm-ld`, but nothing *in
-   the browser* can link the emitted object yet. clang-wasm ships `lld.wasm` (usable read-only),
-   or build lld from the LLVM source in `build/llvm-wasm`. The link needs the wasm sysroot and
-   the EH runtime (`-fwasm-exceptions`, `-lunwind`, `-lc++abi`) now that EH is on — see the
-   command in `README.md`.
+1. ~~**The lld step.**~~ **Done — `try-link.mjs`.** clang-wasm's `lld.wasm` links the object the
+   compiler emits, run as a WASI command in the same host (no host tool), and the result runs.
+   Two facts worth keeping: `lld.wasm` is a *generic* lld driver and must be invoked as
+   **`wasm-ld`** (argv[0] dispatch), and its **LLVM 22 links our LLVM 20 object** fine. The link
+   needs the **`eh/` sysroot libs** (`libunwind.a`, `libc++abi.a`, `libc++.a`) — clang-wasm's own
+   bundled sysroot deliberately excludes `eh/` — so those ship with the page (§7.2).
 2. **Assets.** The Crystal stdlib is **1552 `.cr`, 15 MB** (fits clang-wasm's memfs budget of
-   4091 nodes). It has to ship with the page, plus a wasm sysroot for linking user programs
-   (`crt1.o`, `libc.a`, `libc++.a`, `libc++abi.a`, `libpcre2-8.a`).
+   4091 nodes). It has to ship with the page, plus the wasm sysroot for linking user programs
+   (`libc.a`, `libc++.a`, `libc++abi.a`, `libunwind.a` from `eh/`, `libpcre2-8.a`, the
+   `libwasi-emulated-*` archives, `libclang_rt.builtins.a`) — `try-link.mjs` lists the exact set.
 3. **The page** (`public/index.html` today = read-only pane + precompiled samples):
    an editable editor → run the compiler (with a real filesystem) → take the emitted object →
    link with `lld` → run it through the existing WASI host (`public/wasi-preview1.js`, which
-   has no filesystem and will need one for the compiler). `try-compile.mjs` is the Node harness
-   that already proves the first three fifths of that flow.
-4. **Consider `-Drelease`** for the compiler build — `crystal.wasm` is 96 MB because it is a
-   debug build, and a page should not download that. It would also help the deep recursion:
-   smaller frames mean the AST passes need less of V8's native stack (§6.3), and a browser
-   cannot be given `--stack-size`. Worth measuring against `try-compile.mjs`; if a release build
-   still overflows, the transformer's recursion depth is the thing to look at.
+   has no filesystem and will need one for the compiler). `try-compile.mjs` and `try-link.mjs`
+   are the Node harnesses that already prove the whole flow.
+4. **`--release` is required, not optional.** `RELEASE=1 cross-compile.sh` adds `--release`
+   (-O3 --single-module). It is 79 MB instead of 98 MB, but the real reason is the stack: the
+   **debug** compiler needs more native stack than a browser gives (measured: `--stack-size=1000`
+   fails, `1234` passes; a browser's V8 is ~1 MB and cannot be raised), while the **release**
+   build passes 5/5 even at **700 KB**. With the release compiler the whole flow —
+   `try-compile.mjs` → `try-link.mjs` — runs at Node's *default* stack, which is the shape a
+   browser has. If it ever regresses, the transformer's recursion depth is the thing to look at.
 
 ---
 

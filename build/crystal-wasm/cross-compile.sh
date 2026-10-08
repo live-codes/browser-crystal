@@ -53,12 +53,24 @@ export LLVM_LDFLAGS=""   # the real link is done by hand with wasi-sdk + ../llvm
 cd "$SRC" || exit 1
 
 echo "=== crystal build compiler/crystal.cr --target wasm32-unknown-wasi ==="
+# `RELEASE=1` adds --release (-O3 --single-module). This is not just a size win:
+# the debug build is 96 MB, mostly DWARF, but optimized code also has much
+# smaller frames -- and the deep AST passes (CleanupTransformer) are bounded by
+# V8's *native* stack, which a browser gives about 1 MiB and will not raise.
+# See the "Resolution" note in README.md.
+RELEASE_FLAGS=()
+if [ -n "${RELEASE:-}" ]; then
+  RELEASE_FLAGS=(--release)
+  echo "RELEASE build enabled"
+fi
+
 "$CRYSTAL" build compiler/crystal.cr \
   -Di_know_what_im_doing \
   -Dwithout_playground \
   -Dwithout_docs \
   -Dwithout_interpreter \
   -Duse_pcre2 \
+  "${RELEASE_FLAGS[@]}" \
   --mattr=+exception-handling \
   --cross-compile --target wasm32-unknown-wasi \
   -o "$OUT/crystal.o.wasm"

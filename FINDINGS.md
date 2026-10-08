@@ -347,15 +347,19 @@ and was not.
 compiles the code, so the fix required a **patched compiler binary** — the host compiler rebuilt
 from source (`bootstrap.sh`) and then used to cross-compile.
 
-**It works.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints `caught: boom` / `done`, and the
-wasm compiler compiles a program whose object links and runs (`hello from the wasm Crystal
-compiler`). The full detail, including the two-stacks trap (Crystal's linear stack vs V8's
-*native* stack, and why `-z stack-size` cannot fix a `RangeError`), is in
+**It works, in the host.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints `caught: boom` /
+`done`; the wasm compiler compiles a program; and — with no host tool — clang-wasm's `lld.wasm`
+links the object it emits and the result runs (`hello from the wasm Crystal compiler`; see
+`try-compile.mjs` and `try-link.mjs`). The compiler must be built `--release`: the debug build
+needs ~1.2 MB of V8's *native* stack and a browser gives ~1 MB and cannot be raised, while the
+optimized build fits in 700 KB. The full detail — including the two-stacks trap (Crystal's
+linear stack vs V8's native stack, and why `-z stack-size` cannot fix a `RangeError`) — is in
 [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**Still to do:** the `lld` step *in the browser* (the harness already links with wasi-sdk's
-`wasm-ld`; clang-wasm's `lld.wasm` is available), shipping the stdlib and a wasm sysroot as
-assets, and the page itself — an editable editor that compiles, links and runs.
+**Still to do:** ship the assets the page needs (the stdlib, and the `eh/` sysroot libraries —
+clang-wasm's own sysroot deliberately omits them), and build the page itself — an editable
+editor that compiles, links and runs. The two hard pieces of the pipeline already work in the
+host; what remains is the UI and the payload.
 
 **The honest headline.** The question this document opened with — can Crystal's compiler run in
 a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the
