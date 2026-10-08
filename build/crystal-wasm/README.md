@@ -220,7 +220,10 @@ used. Two things it needs, which the first attempt ran into:
 
 - a native LLVM that Crystal 1.17 supports (8–20). `find-llvm-config.sh` takes the
   first on `PATH`, which here was `llvm-config-21`, so `bootstrap.sh` picks a
-  supported one explicitly.
+  supported one explicitly. This machine has only `llvm-21` (and an
+  `llvm-18` tree with no `bin/llvm-config`), so it needs
+  `apt-get install llvm-20-dev` (available in Ubuntu 24.04 as 20.1.2) to have a
+  usable `/usr/lib/llvm-20/bin/llvm-config`.
 - the native development libraries: `apt-get install libpcre3-dev libgc-dev`
   (the first attempt failed at `cannot find -lpcre`).
 
