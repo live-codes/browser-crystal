@@ -4,9 +4,13 @@
 // interrupted from the inside, so it runs here: a runaway compile blocks this
 // worker, and the page can throw it away with `terminate()`.
 //
-// Assets are fetched and compiled once, then reused for every run — compiling an
-// 80 MB wasm module is the slowest thing that happens, and it should not happen
+// Assets are fetched and compiled once, then reused for every run — compiling a
+// 59 MB wasm module is the slowest thing that happens, and it should not happen
 // twice.
+//
+// Everything arrives gzipped and is inflated here (`DecompressionStream`), so the
+// server needs no content-encoding configuration and any static host will do.
+// That is what makes the payload ~24 MB instead of ~110 MB.
 import { compileAndRun } from './crystal-demo.js';
 
 const LIBRARIES = [
@@ -24,7 +28,7 @@ const LIBRARIES = [
 
 const url = (path) => new URL(`./crystal-demo/${path}`, self.location.href).href;
 
-async function fetchBytes(path) {
+async function fetchGzip(path) {
 	const response = await fetch(url(path));
 	if (!response.ok) {
 		throw new Error(
@@ -32,7 +36,11 @@ async function fetchBytes(path) {
 				'Run build/crystal-wasm/demo-assets.sh to build the demo assets.'
 		);
 	}
-	return new Uint8Array(await response.arrayBuffer());
+	if (typeof DecompressionStream !== 'function') {
+		throw new Error('this browser has no DecompressionStream, which the demo needs to inflate its assets');
+	}
+	const inflated = response.body.pipeThrough(new DecompressionStream('gzip'));
+	return new Uint8Array(await new Response(inflated).arrayBuffer());
 }
 
 let assets = null;
@@ -40,27 +48,18 @@ let assets = null;
 async function loadAssets(phase) {
 	if (assets) return assets;
 
-	phase('loading the compiler');
-	// compileStreaming needs `application/wasm`, which serve.mjs sends, and does
-	// not hold the whole module in JS memory first.
-	const compiler = await WebAssembly.compileStreaming(fetch(url('compiler.wasm')));
+	phase('loading the compiler (15 MB)');
+	const compiler = await WebAssembly.compile(await fetchGzip('compiler.wasm.gz'));
 
-	phase('loading the linker');
-	const lld = await WebAssembly.compileStreaming(fetch(url('lld.wasm')));
+	phase('loading the linker (8 MB)');
+	const lld = await WebAssembly.compile(await fetchGzip('lld.wasm.gz'));
 
 	phase('loading the standard library');
-	const stdlibResponse = await fetch(url('stdlib.json'));
-	if (!stdlibResponse.ok) {
-		throw new Error(
-			`could not fetch crystal-demo/stdlib.json (${stdlibResponse.status}). ` +
-				'Run build/crystal-wasm/demo-assets.sh to build the demo assets.'
-		);
-	}
-	const stdlib = await stdlibResponse.json();
+	const stdlib = JSON.parse(new TextDecoder().decode(await fetchGzip('stdlib.json.gz')));
 
 	phase('loading the sysroot');
 	const libs = {};
-	for (const path of LIBRARIES) libs[path] = await fetchBytes(path);
+	for (const path of LIBRARIES) libs[path] = await fetchGzip(`${path}.gz`);
 
 	assets = { compiler, lld, stdlib, libs };
 	return assets;

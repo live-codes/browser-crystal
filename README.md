@@ -24,7 +24,7 @@ required work that existed nowhere else:
 - **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
   every source edit in one idempotent `apply-patches.py`.
 - **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
-  codegen patch plus one LLVM option the C API cannot set. See
+  codegen patch plus two LLVM options the C API cannot set. See
   [build/crystal-wasm/README.md §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
 [FINDINGS.md](FINDINGS.md) is the narrative; [HANDOFF.md](HANDOFF.md) is the state of the work and
@@ -33,14 +33,15 @@ everything learned the hard way — **start there if you are picking this up**.
 ## Run it
 
 ```bash
-npm run demo:assets   # once — build the demo's payload (Linux or WSL; ~115 MB)
+npm run demo:assets   # once — build the demo's payload (Linux or WSL; downloads 27 MB)
 npm start             # → http://localhost:8127/demo.html
 ```
 
 `npm run demo:assets` collects the compiler, the linker, the standard library and the sysroot
-archives into `public/crystal-demo/`, which is gitignored — they are far too large to commit, and
-building them is a long pipeline whose result is reproducible. Without them the demo loads and
-reports what is missing; the samples page works either way.
+archives into `public/crystal-demo/`, gzipped, which is gitignored — they are far too large to
+commit and building them is a long pipeline whose result is reproducible. The page inflates them
+itself (`DecompressionStream`), so any static host works. Without them the demo loads and reports
+what is missing; the samples page works either way.
 
 A static server is required — ES modules and Workers do not load over `file://` — but it is a plain
 file server and compiles nothing. `serve.mjs` sends `Content-Type: application/wasm`, without which
@@ -63,9 +64,9 @@ the worker, so Stop throws it away and the page survives it.
 | `public/crystal-demo.js` | compile → link → run, in ~200 lines; the same code runs in Node |
 | `public/vendor/browser_wasi_shim/` | the WASI host, and the filesystem the compiler needs |
 
-First run is slow — it downloads ~115 MB and compiles an 80 MB wasm module — and later runs reuse
-the compiled modules. On this machine a compile is ~12 s total (11.9 s compiling, 0.1 s linking),
-measured in headless Chrome.
+First run is slow — it downloads 27 MB of gzipped assets and compiles a 59 MB wasm module — and
+later runs reuse the compiled modules, so only the user's program is compiled. Measured in headless
+Chrome: ~16 s for the first run, ~11 s after (of which ~0.1 s is linking).
 
 `public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
 smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
@@ -87,7 +88,7 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 | | why |
 | --- | --- |
-| **A browser-sized first load** | the compiler is 80 MB because it is the whole compiler and the whole standard library compiled to wasm; gzip helps, but this is a demo, not a distribution |
+| **A small first load** | 27 MB gzipped, and 14.5 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm. Fine over a LAN; a distribution would want less. |
 | **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
 | **`Regex` in a compiled program** | it needs `libpcre2-8.a`, which the demo links — but only because the toolchain list says so; a program that ships its own shims can get further than the samples page does |
 | **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |

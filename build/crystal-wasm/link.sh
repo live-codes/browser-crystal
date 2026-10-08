@@ -37,8 +37,15 @@ fi
 # not affect; that one needs `node --stack-size` (see try-compile.mjs).
 STACK_SIZE="${STACK_SIZE:-33554432}"
 
+# `--strip-debug` drops the DWARF the object carries (~20 MB of a 79 MB module)
+# but keeps the `name` section -- the page has to *compile* this, so the size is
+# latency, and named wasm stack traces are how this project debugs itself.
+# (`--strip-all` would save another 12 MB raw / 1 MB gzipped; not worth losing
+# the names.)
+STRIP_TOOLING=(-Wl,--strip-debug)
+
 "$CC" --target=wasm32-wasip1 --sysroot="$S" -O1 -nostartfiles -fwasm-exceptions \
-  -Wl,-z,stack-size="$STACK_SIZE" \
+  -Wl,-z,stack-size="$STACK_SIZE" "${STRIP_TOOLING[@]}" \
   -o "$OUT/crystal.wasm" \
   "$OUT/crystal.o.wasm" "$OUT/compat.o" $LIBS $PCRE_FLAGS \
   -lc++ -lc++abi -lunwind \

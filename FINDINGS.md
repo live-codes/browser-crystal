@@ -342,6 +342,11 @@ and was not.
    so the compiler now sets it itself: `LLVM.parse_command_line_options(["crystal",
    "-wasm-enable-eh"])` in `codegen/target.cr`, before the target machine is built, plus
    `+exception-handling` in the features.
+4. *One EH proposal, not two.* LLVM 20 emits the **legacy** proposal by default; wasi-sdk 33's
+   libc++ is built with the **standardized** one (`try_table`/`throw_ref`). A module may not mix
+   them — V8 rejects it at validation — so the compiler also passes `-wasm-use-legacy-eh=false` and
+   everything is standardized. It stayed hidden because `WebAssembly.compileStreaming` validates
+   lazily and the mix only fails when something forces full validation.
 
 **The consequence that shapes the work:** the catchpad/personality come from whichever compiler
 compiles the code, so the fix required a **patched compiler binary** — the host compiler rebuilt
@@ -358,9 +363,9 @@ two-stacks trap (Crystal's linear stack vs V8's native stack, and why `-z stack-
 `RangeError`) — is in
 [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**Still to do:** make the payload shippable — it is ~115 MB uncompressed (an 80 MB compiler, a 21 MB
-linker, a 10 MB stdlib and the sysroot archives), so gzip and trimming the stdlib to what a page
-actually needs. The pipeline itself is proved, end to end, in the browser.
+**Still to do:** the payload is now 27 MB gzipped (110 MB raw) — the compiler is 14.5 MB of that,
+and it is the whole compiler plus the whole standard library compiled to wasm. Shrinking it further
+is the one open item; the pipeline itself is proved, end to end, in the browser.
 
 **The honest headline.** The question this document opened with — can Crystal's compiler run in
 a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the

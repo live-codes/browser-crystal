@@ -210,8 +210,16 @@ deeply, and there are two different stacks:
   Node's default native stack is ~1 MiB, below the 8 MiB a native build gets, so
   `CleanupTransformer` overflows it **non-deterministically** (Crystal's hashes are randomly
   seeded; traversal depth varies run to run). The harness needs
-  **`node --stack-size=4000`** (`try-compile.mjs` documents this). A browser cannot raise this —
-  see §7.
+  **`node --stack-size=4000`** (`try-compile.mjs` documents this). A browser cannot raise this — so
+  the page build is `--release`, whose optimized frames pass 5/5 even at `--stack-size=700`.
+
+**4. One EH proposal, not two.** LLVM 20 emits the **legacy** proposal (`try`/`catch`/`rethrow`) by
+default; **wasi-sdk 33's libc++ uses the standardized one** (`try_table`/`throw_ref`). Linking our
+object against those libraries yields a module containing **both**, which V8 rejects at validation
+(*"module uses a mix of legacy and new exception handling instructions"*). The patch therefore also
+passes **`-wasm-use-legacy-eh=false`** so everything is emitted for the standardized proposal. This
+hid for a long time because `WebAssembly.compileStreaming` compiles lazily and never validated the
+offending functions; a plain `WebAssembly.compile` (what the demo does) surfaces it immediately.
 
 **Do not reintroduce these — they were wrong paths:**
 
@@ -222,6 +230,9 @@ deeply, and there are two different stacks:
 - Relying on `--mattr=+exception-handling` to turn on wasm EH — it does not; `-wasm-enable-eh`
   does (part 2). `--mattr`/the `features +=` line only makes `try`/`catch` *selectable*.
 - Treating the two stacks as one. `-z stack-size` will not fix a `RangeError`.
+- Trusting a module because it *runs*: `WebAssembly.compileStreaming` validates lazily, so a module
+  that mixes EH proposals appears fine until something calls `WebAssembly.compile`. Check the
+  opcodes, not the run.
 - Any declaration inside a statement-position `{% if %}` in Crystal source: it is not visible
   after `{% end %}`. Use expression-position macros or a runtime `if`.
 
@@ -238,10 +249,13 @@ The exception blocker is closed (§6). What is left is the browser:
    needs the **`eh/` sysroot libs** (`libunwind.a`, `libc++abi.a`, `libc++.a`) — clang-wasm's own
    bundled sysroot deliberately excludes `eh/` — so those ship with the page (§7.2).
 2. **Assets.** `build/crystal-wasm/demo-assets.sh` collects everything the demo needs into
-   `public/crystal-demo/` (gitignored): `compiler.wasm`, `lld.wasm`, `stdlib.json` (the patched
-   stdlib, 1606 files) and `lib/…` — the sysroot archives from wasi-sdk-33 plus PCRE2 and
-   clang_rt. ~115 MB uncompressed; the unwritten work is making that shippable (gzip, and trimming
-   the stdlib — the page only needs the prelude and what a program requires).
+   `public/crystal-demo/` (gitignored): the compiler, lld, a `stdlib.json` (the patched stdlib) and
+   the `lib/…` archives from wasi-sdk-33 plus PCRE2 and clang_rt. **All gzipped — 27 MB total, down
+   from 110 MB uncompressed.** Three things got it there: gzip (~4×, the page inflates it with
+   `DecompressionStream`), `-Wl,--strip-debug` in `link.sh` (79 → 59 MB; keeps the `name` section,
+   which is how this project reads wasm stack traces), and dropping `compiler/` from the shipped
+   stdlib (3.5 MB of 9.5 MB, never required by a program being compiled). A distribution would still
+   want a smaller compiler — that is the one open item.
 3. ~~**The page.**~~ **Done — `public/demo.html`.** An editable editor that compiles, links and
    runs in the tab: `public/demo-worker.js` (fetches and caches the compiled modules) →
    `public/crystal-demo.js` (compile → link → run, ~200 lines, no browser-only API, so

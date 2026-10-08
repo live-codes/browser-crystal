@@ -1,16 +1,22 @@
 // test/demo.mjs — drive public/crystal-demo.js in Node.
 //
-//   node test/demo.mjs
+//   npm run test:demo
 //
 // The demo's core has no browser-only API, so the whole compile → link → run
-// chain can be checked here, against the same assets the page fetches. What the
-// browser adds is only asset loading and the UI; keeping this fast is what makes
-// the page's implementation cheap to trust.
+// chain can be checked here, against the same assets the page fetches (gzipped,
+// as the page gets them). What the browser adds is only asset loading and the
+// UI; keeping this fast is what makes the page's implementation cheap to trust.
+//
+// `--experimental-wasm-exnref` is passed by the npm script: the optimized
+// compiler emits the wasm-EH `exnref` value type, which current Chrome has on by
+// default and older Node does not.
 import { readFile, readdir } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
 import { compileAndRun } from '../public/crystal-demo.js';
 
 const DIR = new URL('../public/crystal-demo/', import.meta.url);
 const read = (path) => readFile(new URL(path, DIR));
+const readGzip = async (path) => new Uint8Array(gunzipSync(await read(path)));
 
 async function walk(prefix) {
 	const out = [];
@@ -21,6 +27,7 @@ async function walk(prefix) {
 	}
 	return out;
 }
+
 const PROGRAM = `begin
   raise "boom"
 rescue ex : Exception
@@ -30,15 +37,21 @@ puts "done"
 `;
 
 console.log('loading assets …');
-const [compiler, lld, stdlibJSON] = await Promise.all([
-	read('compiler.wasm'), read('lld.wasm'), read('stdlib.json')
+const [compiler, lld, stdlibGzip] = await Promise.all([
+	readGzip('compiler.wasm.gz'), readGzip('lld.wasm.gz'), readGzip('stdlib.json.gz')
 ]);
-const stdlib = JSON.parse(stdlibJSON.toString('utf8'));
+const stdlib = JSON.parse(new TextDecoder().decode(stdlibGzip));
 const libs = {};
-for (const path of await walk('lib/')) libs[path] = await read(path);
+for (const path of await walk('lib/')) libs[path.replace(/\.gz$/, '')] = await readGzip(path);
 console.log(`  stdlib ${Object.keys(stdlib).length} files, ${Object.keys(libs).length} libraries`);
 
-const assets = { compiler, lld, stdlib, libs };
+console.log('compiling the compiler …');
+const assets = {
+	compiler: await WebAssembly.compile(compiler),
+	lld: await WebAssembly.compile(lld),
+	stdlib,
+	libs
+};
 
 let last = '';
 const result = await compileAndRun({
@@ -55,7 +68,10 @@ const result = await compileAndRun({
 });
 
 console.log('exitCode:', result.exitCode);
-console.log('phases:', Object.fromEntries(Object.entries(result.phases).map(([k, v]) => [k, `${v.toFixed(0)} ms`])));
+console.log(
+	'phases:',
+	Object.fromEntries(Object.entries(result.phases).map(([k, v]) => [k, `${v.toFixed(0)} ms`]))
+);
 const expected = 'caught: boom\ndone\n';
 if (result.stdout === expected && result.exitCode === 0) {
 	console.log('OK');

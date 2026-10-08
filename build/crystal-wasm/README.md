@@ -387,6 +387,28 @@ resolved in three parts, all in `apply-patches.py`:
      why the page build is **`--release`**: the optimized compiler passes 5/5 even
      at `--stack-size=700` (and is 79 MB instead of 98 MB). See below.
 
+4. **One EH proposal, not two.** This one cost the most time to see. LLVM 20 emits
+   the **legacy** wasm EH proposal (`try`/`catch`/`rethrow`) by default — the
+   `WasmUseLegacyEH` cl::opt's own comment says *"Currently set to true by default
+   because not all major web browsers turn on the new standard proposal by
+   default, but will later change to false"* — while **wasi-sdk 33's libc++ is
+   built with the standardized one** (`try_table`/`throw_ref`: 1430 and 1007 uses
+   in `libc++.a`). Linking our object against those libraries produces a module
+   containing **both**, and a module may not: V8 rejects it at validation with
+   *"module uses a mix of legacy and new exception handling instructions"*. The
+   patch therefore also passes **`-wasm-use-legacy-eh=false`**, so everything is
+   emitted for the standardized proposal — the one LLVM's comment says browsers
+   are moving to, and the one wasi-sdk's libraries already use.
+
+   It hid for a long time because `WebAssembly.compileStreaming` compiles
+   lazily: a lazy host never validates the offending functions, so the mixed
+   module appeared to work. It surfaces as soon as anything validates eagerly —
+   a plain `WebAssembly.compile`, which is what the demo does after inflating its
+   assets. If EH ever starts failing "for no reason", count the opcodes:
+   `crystal.wasm` must contain no legacy `try`/`catch` at all (it is 4983
+   `try_table` + 1025 `throw_ref`), and `out.o.wasm` and the linked module must
+   agree with each other.
+
 **The reproducible end state** (all from `apply-patches.py`; see `HANDOFF.md`):
 
 ```
@@ -450,17 +472,28 @@ public/crystal-demo.js  compile → link → run; no browser-only API
 public/vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs
 ```
 
-`demo-assets.sh` collects what it fetches into `public/crystal-demo/` (gitignored):
-`compiler.wasm`, `lld.wasm`, `stdlib.json` (the patched stdlib, 1606 files) and
-`lib/…` (the sysroot archives, PCRE2, clang_rt). ~115 MB uncompressed.
+`demo-assets.sh` collects what it fetches into `public/crystal-demo/` (gitignored),
+**gzipped**, because the page inflates it itself with `DecompressionStream` — no
+server configuration, any static host:
 
-`public/crystal-demo.js` is deliberately the same logic as `try-compile.mjs` +
-`try-link.mjs`, but expressed once and with no Node API — so `test/demo.mjs` runs
-the exact code the page runs, against the exact assets it fetches. The page's
-worker adds only fetching, caching the compiled modules, and the protocol.
+| | raw | gzipped |
+| --- | --- | --- |
+| `compiler.wasm` (`--release`, `--strip-debug`) | 59 MB | 14.5 MB |
+| `lld.wasm` (clang-wasm's) | 21 MB | 7.8 MB |
+| `stdlib.json` (the patched stdlib, 1369 files) | 6.3 MB | 1.3 MB |
+| `lib/…` (sysroot, PCRE2, clang_rt) | 14 MB | 3.2 MB |
+| **total** | **110 MB** | **27 MB** |
 
-Verified in headless Chrome with `crossOriginIsolated === false`, ~12 s a compile
-(11.9 s compiling, 0.1 s linking), including `begin`/`rescue`/`ensure`.
+Three things did that, in order of size: **gzip** (~4×), dropping the DWARF
+(`--strip-debug`: 79 → 59 MB, keeping the `name` section because named wasm stack
+traces are how this project debugs itself — `--strip-all` saves another 12 MB raw
+but only 1 MB gzipped), and **dropping `compiler/` from the shipped stdlib** — it
+is the compiler's own source, 3.5 MB of the 9.5 MB, and a program being compiled
+never requires it.
+
+Verified in headless Chrome with `crossOriginIsolated === false`, ~16 s for the
+first run (asset load, module compile, program compile) and ~11 s after, including
+`begin`/`rescue`/`ensure`.
 
 ## Reproduce
 

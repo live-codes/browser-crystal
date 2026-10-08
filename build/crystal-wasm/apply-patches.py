@@ -504,7 +504,8 @@ CODEGEN_TARGET_EH_METHOD_NEW = """    environment == other.environment
 
   @@wasm_eh_enabled = false
 
-  # Turns on WebAssembly exception handling in the wasm backend.
+  # Turns on WebAssembly exception handling in the wasm backend, and picks the
+  # proposal the whole module will use.
   #
   # The exception model is selected by an LLVM `cl::opt` (`-wasm-enable-eh`) that
   # is not reachable through the LLVM C API. Without it the wasm backend runs the
@@ -516,8 +517,20 @@ CODEGEN_TARGET_EH_METHOD_NEW = """    environment == other.environment
     return if @@wasm_eh_enabled
     @@wasm_eh_enabled = true
 
+    # `-wasm-use-legacy-eh=false` is the second half, and it is not optional.
+    # LLVM 20 defaults to the *legacy* proposal (`try`/`catch`/`rethrow`) while
+    # wasi-sdk's libc++ is built with the standardized one (`try_table`/
+    # `throw_ref`) -- and a module may not contain both: V8 rejects a mix at
+    # validation, which a lazily-compiled module hides until something forces a
+    # full validation. So everything is emitted for the standardized proposal,
+    # which is also the one LLVM's own comment says browsers are moving to.
+    #
     # LLVMParseCommandLineOptions skips argv[0], hence the leading "crystal".
-    LLVM.parse_command_line_options(["crystal", "-wasm-enable-eh"])
+    LLVM.parse_command_line_options([
+      "crystal",
+      "-wasm-enable-eh",
+      "-wasm-use-legacy-eh=false",
+    ])
   end
 end"""
 
