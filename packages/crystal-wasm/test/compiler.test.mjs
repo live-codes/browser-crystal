@@ -7,6 +7,7 @@
 // emits the wasm-EH `exnref` value type, which current Chrome has on by default
 // and older Node does not.
 import assert from 'node:assert/strict';
+import { readFile, stat } from 'node:fs/promises';
 import { after, before, describe, test } from 'node:test';
 
 import { createCompiler } from '../src/index.node.js';
@@ -94,6 +95,22 @@ describe('@live-codes/crystal-wasm', () => {
 		await disposable.dispose();
 		await disposable.dispose();
 		await assert.rejects(disposable.run('puts 1'), /disposed/);
+	});
+});
+
+describe('what the package publishes', () => {
+	test('the files list covers everything the browser entry loads', async () => {
+		// A page loads the package's own source and its vendored WASI host by relative
+		// path, so anything `files` leaves out is not a smaller package — it is one that
+		// cannot run at all. That happened: `vendor/` was missing until this was checked.
+		const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+		for (const needed of ['src', 'vendor', 'assets']) {
+			assert.ok(manifest.files.includes(needed), `${needed}/ has to be published`);
+		}
+		await assert.doesNotReject(
+			stat(new URL('../vendor/browser_wasi_shim/index.js', import.meta.url)),
+			'the vendored WASI host src/engine.js imports has to be there'
+		);
 	});
 });
 

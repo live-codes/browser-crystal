@@ -309,16 +309,30 @@ and only a build machine ever wants it: libLLVM-for-wasm.
    resolves in order `$LLVM_WASM`, then the in-repo copy, then the installed package, so both
    states work and the deletion is a one-line follow-up.
 
-   Sizes: the tarball is **22 MB** (23 files) — the payload ships as a single `out.tar.xz`, which
-   `postinstall` unpacks to 143 MB, so this is 45% less to download than the 38 MB the 2278 loose
-   files made, and one request from a CDN instead of 2278. `out/` stays in the repository (that is
-   what the pipeline writes) and is excluded from the tarball by `files`. If it ever becomes the
-   deciding factor, the escape hatch is a release asset plus a fetch, the shape
-   `@live-codes/clang-wasm` uses.
+   Shape: the archives ship **gzipped, one file each** (`out/lib/*.a.gz`), which is the only form a
+   page can use — `DecompressionStream` does gzip and nothing else, and one file per archive means a
+   link fetches only what it names. `src/index.js` is the browser entry
+   (`loadArchives({ baseUrl })` → verified, inflated bytes), `src/index.node.js` does the same off
+   disk, and `llvm-wasm-unpack` inflates them in place for a link on disk (`postinstall` runs it).
+   A single `.tar.xz` of the whole tree would be 22 MB against 37.7 — half again smaller — but a
+   browser cannot open it, and the browser is the target, so the tarball carries that difference.
+   `npm test` there (`scripts/check-load.mjs`) loads all 99 archives through the browser entry over
+   HTTP, which is the path that has to keep working.
 3. **Deliberately not now:** upstreaming the `browser_wasi_shim` file-growth fix (our patch exists
    only because upstream grows files quadratically — it needs network access); the wasm-only lld
    (see below — built, and *larger*); and further compiler trimming (11.8 MB gzipped is the floor for
    the whole compiler plus the whole standard library as wasm).
+
+**Both packages load from a CDN in a browser, and that is verified, not assumed.** The target for
+all of this is the page, so the shape of each payload is decided by what a page can inflate:
+
+- `@live-codes/crystal-wasm` — its entry imported **by URL** (not by a local path), with `baseUrl`
+  pointing at the package's own `assets/crystal/`, compiled and ran a program in headless Chrome:
+  `caught: boom`, exit 0, 3.3 s. Its `files` list had to include `vendor/` or the published package
+  could not load at all — that was a real bug until this was checked.
+- `@live-codes/llvm-wasm` — its browser entry fetched, verified and inflated all 99 archives over
+  HTTP (`npm test` there), and the same archives, packed into the tarball, extracted elsewhere and
+  unpacked, still link the compiler.
 
 One small item folds into the next rebuild: the `_Unwind_SetIP` binding mismatch (§8), which needs a
 fresh `crystal.wasm` and a re-pin.

@@ -22,7 +22,8 @@ required work that existed nowhere else:
 - **a libLLVM for `wasm32-wasip1`** — Crystal links LLVM, and no wasm build of it existed to
   download. It does now: [`build/llvm-wasm/`](build/llvm-wasm/), 99 archives, verified — and it
   lives in [its own repository](https://github.com/live-codes/llvm-wasm) as the
-  `@live-codes/llvm-wasm` package, so other LLVM-based ports can reuse it.
+  `@live-codes/llvm-wasm` package, so other LLVM-based ports can reuse it. Its archives ship
+  gzipped one file per archive, so a page can fetch and inflate them too.
 - **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
   every source edit in one idempotent `apply-patches.py`.
 - **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
@@ -52,6 +53,13 @@ and reports what is missing.
 A static server is required — ES modules and Workers do not load over `file://` — but it is a plain
 file server and compiles nothing. `serve.mjs` sends `Content-Type: application/wasm`, without which
 `WebAssembly.compileStreaming` refuses the response.
+
+The page imports the package from `../packages/crystal-wasm`, which is exactly what a consumer does
+over HTTP: [`@live-codes/crystal-wasm`](packages/crystal-wasm) is loadable from a CDN — entry and
+assets both, with `baseUrl` pointing at the package's own `assets/crystal/` — and it was verified
+that way (entry imported by URL, a program compiled and run). The same goes for
+[`@live-codes/llvm-wasm`](https://github.com/live-codes/llvm-wasm), whose archives a page can fetch
+and inflate one at a time.
 
 There is no `npm install`: neither the page nor the package has a dependency, and the one piece of
 third-party host code (the WASI shim) is vendored into `packages/crystal-wasm/vendor/`.

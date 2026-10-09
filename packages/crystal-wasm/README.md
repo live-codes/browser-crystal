@@ -47,19 +47,31 @@ await compiler.dispose();
 
 ### The assets have to be served
 
-A browser cannot read a file inside an npm package, so the assets must live where the
-page can fetch them. One command copies them out of the package:
+A browser cannot read a file inside an npm package, so the assets must live where the page can
+fetch them — which is what a CDN already does. Nothing has to be copied: import the entry from
+the same place and point `baseUrl` at the package's own assets.
+
+```js
+import { createCompiler } from 'https://cdn.jsdelivr.net/npm/@live-codes/crystal-wasm@0.1.0/src/index.js';
+
+const compiler = await createCompiler({
+  baseUrl: 'https://cdn.jsdelivr.net/npm/@live-codes/crystal-wasm@0.1.0/assets/crystal/'
+});
+```
+
+Everything the page needs is in the package — the loader, the compile → link → run core, the
+vendored WASI host, and the payload — and the assets are gzipped as they are, with no
+content-encoding to configure, because the loader inflates them with `DecompressionStream`.
+The CDN only has to serve them and send CORS headers, which jsDelivr does.
+
+To serve them yourself instead, copy them out once and point `baseUrl` at your copy:
 
 ```bash
 npx --package @live-codes/crystal-wasm crystal-wasm-copy-assets public/crystal
 ```
 
-and `baseUrl` points at that directory. Any static host works: the files are gzipped
-as they are, with no content-encoding to configure, because the loader inflates them
-with `DecompressionStream`.
-
-In **Node** there is nothing to copy — the assets that ship in the package are read
-off disk, `baseUrl` is optional, and `createCompiler()` on its own is enough.
+In **Node** there is nothing to copy — the assets that ship in the package are read off disk,
+`baseUrl` is optional, and `createCompiler()` on its own is enough.
 
 ### Compiling a program
 
