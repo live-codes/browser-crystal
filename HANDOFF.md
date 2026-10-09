@@ -309,9 +309,12 @@ and only a build machine ever wants it: libLLVM-for-wasm.
    resolves in order `$LLVM_WASM`, then the in-repo copy, then the installed package, so both
    states work and the deletion is a one-line follow-up.
 
-   Sizes: the tarball is **38 MB compressed** (143 MB installed, 2278 files) — friendlier than the
-   141 MB on disk suggests, and within npm's limits. If it ever is not, the escape hatch is a
-   release asset plus a fetch, the shape `@live-codes/clang-wasm` uses.
+   Sizes: the tarball is **22 MB** (23 files) — the payload ships as a single `out.tar.xz`, which
+   `postinstall` unpacks to 143 MB, so this is 45% less to download than the 38 MB the 2278 loose
+   files made, and one request from a CDN instead of 2278. `out/` stays in the repository (that is
+   what the pipeline writes) and is excluded from the tarball by `files`. If it ever becomes the
+   deciding factor, the escape hatch is a release asset plus a fetch, the shape
+   `@live-codes/clang-wasm` uses.
 3. **Deliberately not now:** upstreaming the `browser_wasi_shim` file-growth fix (our patch exists
    only because upstream grows files quadratically — it needs network access); the wasm-only lld
    (see below — built, and *larger*); and further compiler trimming (11.8 MB gzipped is the floor for

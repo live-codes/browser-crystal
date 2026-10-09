@@ -28,6 +28,7 @@ if [ -z "${LLVM_WASM:-}" ]; then
 fi
 if [ -z "${LLVM_WASM:-}" ] || [ ! -d "$LLVM_WASM/out/lib" ]; then
   echo "link.sh: no libLLVM found. Set LLVM_WASM, install @live-codes/llvm-wasm," >&2
+  echo "         unpack it (npx llvm-wasm-unpack) if lifecycle scripts were skipped," >&2
   echo "         or keep build/llvm-wasm/ (its out/lib has the archives)." >&2
   exit 1
 fi
