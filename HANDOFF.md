@@ -313,11 +313,13 @@ and only a build machine ever wants it: libLLVM-for-wasm.
    page can use — `DecompressionStream` does gzip and nothing else, and one file per archive means a
    link fetches only what it names. `src/index.js` is the browser entry
    (`loadArchives({ baseUrl })` → verified, inflated bytes), `src/index.node.js` does the same off
-   disk, and `llvm-wasm-unpack` inflates them in place for a link on disk (`postinstall` runs it).
-   A single `.tar.xz` of the whole tree would be 22 MB against 37.7 — half again smaller — but a
-   browser cannot open it, and the browser is the target, so the tarball carries that difference.
-   `npm test` there (`scripts/check-load.mjs`) loads all 99 archives through the browser entry over
-   HTTP, which is the path that has to keep working.
+   disk, and `llvm-wasm-unpack` inflates them in place for a link on disk. **There is no
+   `postinstall`** — lifecycle scripts get blocked, so nothing runs at install time and the
+   decompressing happens where it is used: `link.sh` inflates the archives into `$OUT/libLLVM` when
+   it finds no plain ones. A single `.tar.xz` of the whole tree would be 22 MB against 37.7 — half
+   again smaller — but a browser cannot open it, and the browser is the target, so the tarball
+   carries that difference. `npm test` there (`scripts/check-load.mjs`) loads all 99 archives
+   through the browser entry over HTTP, which is the path that has to keep working.
 3. **Deliberately not now:** upstreaming the `browser_wasi_shim` file-growth fix (our patch exists
    only because upstream grows files quadratically — it needs network access); the wasm-only lld
    (see below — built, and *larger*); and further compiler trimming (11.8 MB gzipped is the floor for
@@ -460,6 +462,13 @@ e6f8dd1  initial commit
 
 ## 10. Cautions
 
+- **The hosting limits, and how to stay under them.** jsDelivr will not serve a package over 150 MB,
+  and GitHub refuses a file over 100 MB. Measured: `@live-codes/llvm-wasm` is **37.7 MB on the wire,
+  62.4 MB unpacked**, `@live-codes/crystal-wasm` is **22.8 MB**, and the largest file in either
+  repository is **12.82 MB**. Re-check after any change to a payload with
+  `npm pack <dir> --dry-run` (sizes and file count), and the largest files in a repository with
+  `cd <repo> && git ls-files -z | xargs -0 stat -c '%s %n' | sort -rn | head`. The way to break it
+  is to ship the plain archives again: `files` must list `out/lib/*.a.gz`, never `out/lib`.
 - `build/llvm-wasm/out/` is ~140 MB and **committed on purpose** by the user. Don't "clean" it — and
   note that it now has a second home: the `llvm-wasm` repository it was extracted to (§7), which
   keeps the same files and adds the package around them.

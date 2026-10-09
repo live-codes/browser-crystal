@@ -37,7 +37,22 @@ S="$WASI_SDK/share/wasi-sysroot"
 CC="$WASI_SDK/bin/clang"
 EMU="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS"
 COMPAT="$LLVM_WASM/wasi-compat"
-LIBS=$(find "$LLVM_WASM/out/lib" -name 'libLLVM*.a' | sort | tr '\n' ' ')
+LLVM_LIB="$LLVM_WASM/out/lib"
+
+# The archives ship gzipped — one file each, because that is the shape a browser can fetch
+# and inflate — and a link needs files. So inflate them here, into the build tree, instead of
+# depending on something having run at install time: the package has no lifecycle script, and
+# this is the "decompress when you need it" half of that. A checkout, or a package somebody
+# ran `llvm-wasm-unpack` in, already has the plain files and is used as it is.
+if [ -z "$(find "$LLVM_LIB" -name 'libLLVM*.a' -print -quit)" ]; then
+  mkdir -p "$OUT/libLLVM"
+  for gz in "$LLVM_LIB"/libLLVM*.a.gz; do
+    target="$OUT/libLLVM/$(basename "${gz%.gz}")"
+    [ -f "$target" ] || gzip -dc "$gz" > "$target"
+  done
+  LLVM_LIB="$OUT/libLLVM"
+fi
+LIBS=$(find "$LLVM_LIB" -name 'libLLVM*.a' | sort | tr '\n' ' ')
 
 echo "libLLVM: $LLVM_WASM"
 
