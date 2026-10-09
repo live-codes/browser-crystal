@@ -356,7 +356,9 @@ from source (`bootstrap.sh`) and then used to cross-compile.
 `caught: boom` / `done`; the wasm compiler compiles a program; and — with no host tool — clang-wasm's
 `lld.wasm` links the object it emits and the result runs. [`public/demo.html`](public/demo.html) puts
 the whole chain behind an editor: edit, press Run, and the compiler, the linker and the program all
-run in the tab (~12 s a compile, verified in headless Chrome). The compiler must be built
+run in the tab (~2 s a compile, verified in headless Chrome — it was 10–15 s until the WASI host's
+quadratic file growth was fixed; see [build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went)).
+The compiler must be built
 `--release`: the debug build needs ~1.2 MB of V8's *native* stack and a browser gives ~1 MB and
 cannot be raised, while the optimized build fits in 700 KB. The full detail — including the
 two-stacks trap (Crystal's linear stack vs V8's native stack, and why `-z stack-size` cannot fix a

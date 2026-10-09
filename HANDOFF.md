@@ -326,6 +326,13 @@ bootstrap compiler — put compiler-side helpers in `compiler/…` files instead
   patch and then used for the cross-compile. (Warm Crystal caches make this ~30 s, not 10 min.)
 - When disassembling a linked wasm to check EH, remember the `throw` may be libunwind's, not the
   compiler's — check the *object* (`exc.o.wasm`), not just the linked module.
+- **Measure the host before blaming the compiler.** A demo compile was 10–15 s and the wasm compiler
+  looked like the reason; `--stats` showed it was `Codegen (bc+obj)` (8.8 s vs 0.23 s native), and
+  per-syscall timing showed **110,599 `fd_write` calls taking 7.4 s**: `browser_wasi_shim` grows a
+  file by reallocating and copying on every write past the end, so writing an object file is
+  quadratic. Fixed in `public/crystal-demo.js` (geometric growth, a separately tracked length, and
+  trimming before anything reads) — **10.7 s → 4.2 s**. Parsing and semantic analysis had been
+  within a few percent of native the whole time.
 
 ---
 

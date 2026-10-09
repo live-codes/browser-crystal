@@ -534,8 +534,55 @@ compiles for `wasm32-wasip1` with almost no porting** — the interaction above 
 the only real one — so a wasm-only lld is a fork worth making only if the payload
 ever has to shrink by those 4 MB badly enough to maintain it.
 
-Verified in headless Chrome with `crossOriginIsolated === false`, ~15 s per
-compile after the first run, including `begin`/`rescue`/`ensure`.
+### Where the compile time went
+
+A compile was 10–15 s; it is now ~2 s, and almost all of the difference was one
+behaviour in the WASI host.
+
+`--stats` on the *wasm* compiler, against the same program under the native
+compiler, showed the cost was **not** parsing or semantic analysis — those match
+the native build within a few percent — but `Codegen (bc+obj)`:
+
+| phase | native | wasm before | wasm after |
+| --- | --- | --- | --- |
+| Parse | 0.01 s | 0.01 s | 0.01 s |
+| Semantic (top level) | 1.13 s | 1.16 s | 1.16 s |
+| Semantic (main) | 0.10 s | 0.27 s | 0.27 s |
+| Codegen (crystal) | 0.06 s | 0.24 s | 0.24 s |
+| **Codegen (bc+obj)** | 0.23 s | **8.81 s** | 1.8 s |
+| **total** | 1.9 s | 10.7 s | ~4 s |
+
+Counting and timing every WASI import named it exactly:
+
+```
+fd_write    110,599 calls   7,385 ms
+fd_read         532 calls      20 ms
+fd_seek      22,635 calls       5 ms
+```
+
+LLVM writes a wasm object in ~110k small positioned writes, and
+`browser_wasi_shim` grows a file by allocating *exactly* what each write needs and
+copying the old bytes in, on every write past the end. That is quadratic, and for
+a 500 KB object it swamps everything else — the other 110k calls together are
+under 100 ms.
+
+`public/crystal-demo.js` carries a small patch for it: files grow geometrically,
+the written length is tracked separately from the buffer, every length-sensitive
+operation (`File#size`, `WHENCE_END` seeks) uses that length, and files are
+trimmed back to it before anything reads them. `fd_write` fell from 7.4 s to 86 ms
+in Node, and the browser's compile from 10–15 s to ~2 s.
+
+Two bugs in that patch are worth not repeating: taking a buffer's *capacity* for
+the file's length (the tracked length ratchets up to the capacity — the first
+wrong object was exactly 524,288 bytes, a power of two), and leaving `WHENCE_END`
+seeking to `data.byteLength`, which leaves a gap of zeros in the middle of the
+object.
+
+The vendored shim is untouched: the patch lives where the reason is visible.
+
+Verified in headless Chrome with `crossOriginIsolated === false`: 4.3 s for the
+first run (asset load, module compile and the program together), **2.0 s after**,
+including `begin`/`rescue`/`ensure`.
 
 ## Reproduce
 

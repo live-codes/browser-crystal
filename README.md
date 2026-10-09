@@ -66,7 +66,9 @@ the worker, so Stop throws it away and the page survives it.
 
 First run is slow — it downloads 23 MB of gzipped assets and compiles a 35 MB wasm module — and
 later runs reuse the compiled modules, so only the user's program is compiled. Measured in headless
-Chrome: ~16 s for the first run, ~15 s after (of which ~0.1 s is linking).
+Chrome: **4.3 s for the first run, 2.0 s after**. (It was 16 s and 10–15 s until the WASI host's
+file writes were fixed: writing an object file was quadratic. See
+[build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went).)
 
 `public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
 smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
