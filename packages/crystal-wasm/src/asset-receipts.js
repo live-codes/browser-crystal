@@ -10,7 +10,7 @@
 export const ASSET_RECEIPTS = {
 	"compiler.wasm.gz": {
 		"bytes": 11806297,
-		"sha256": "6a6f8503dc283eaab1777d320603b54c781346378ee7a88819eb742da4134a75"
+		"sha256": "f40e3d994dec0938e40137b5a520d39d9d3c205c65a6d386a443b46ee08e44e8"
 	},
 	"lib/eh/libc++abi.a.gz": {
 		"bytes": 472129,
@@ -53,7 +53,7 @@ export const ASSET_RECEIPTS = {
 		"sha256": "f842a9b5df3c6d326f0260bfd313c11c2e22bc8b8ae0387deede9a4af55779cd"
 	},
 	"stdlib.json.gz": {
-		"bytes": 1339855,
-		"sha256": "5ef0575afc65d763965ffe78c021cb43239d6f21e809ccd82e862dc6301cb526"
+		"bytes": 1339858,
+		"sha256": "ef4778f426755622f227e05921085b049d2c434f8397f395beb0197d730b2331"
 	}
 };

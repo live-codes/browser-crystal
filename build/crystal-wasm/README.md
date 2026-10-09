@@ -281,11 +281,10 @@ so the catch is not taking effect. Where to look next:
   from the type id read at the exception pointer; if that value is wrong the rescue
   falls through and Crystal re-raises — which also escapes. Worth checking against
   a known type id.
-- **The `_Unwind_SetIP` mismatch below** is unresolved and may matter: Crystal's
-  `LibUnwind` bindings assume the Itanium signatures, while libunwind's wasm port
-  returns `void` from `_Unwind_SetIP`. Harmless if Crystal's personality is never
-  called (which is the case on wasm), but it means the bindings do not match the
-  library and should be reconciled.
+- **The `_Unwind_SetIP` mismatch below** turned out not to matter for this bug, and was a real
+  (if harmless) mistake in its own right: Crystal's `LibUnwind` bindings assume the Itanium
+  signatures, while libunwind's wasm port returns `void` from `_Unwind_SetIP`. **Fixed in 0.1.1** by
+  a patch on `exception/lib_unwind.cr`, which removes the mismatch from the emitted IR.
 
 A minimal repro made this much faster to work on — `begin / raise / rescue` in a
 three-line program compiles and links in seconds (`sh_exc.sh` upstream of this
@@ -323,9 +322,8 @@ wasm-ld: warning: function signature mismatch: _Unwind_SetIP
 ```
 
 Everything else is ready: the bootstrap builds, the cross-compile runs with the
-patched compiler, and the link resolves (only a benign `_Unwind_SetIP` signature
-warning, from libunwind's wasm `_Unwind_SetIP` returning void where Crystal's
-binding says `SizeT`).
+patched compiler, and the link resolves (apart from the `_Unwind_SetIP` signature
+warning above, which 0.1.1 removed by correcting the binding).
 
 | Piece | State |
 | --- | --- |

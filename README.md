@@ -97,9 +97,10 @@ file was quadratic. See
 [build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went).
 
 The output pane is the *program's* output. The compiler's and the linker's own chatter is buffered
-and not shown — Crystal echoes the link command it would have run, and lld warns about a known,
-benign `_Unwind_SetIP` signature mismatch in libunwind's wasm port. A warning *about your code* and
-a failed build's diagnostics still appear.
+and not shown — Crystal echoes the link command it would have run, which is not the link this does.
+(lld also warned that Crystal's `_Unwind_SetIP` binding disagreed with libunwind; that was fixed at
+the source in 0.1.1, so the build is quiet on its own now.) A warning *about your code* and a failed
+build's diagnostics still appear.
 
 ## What works
 

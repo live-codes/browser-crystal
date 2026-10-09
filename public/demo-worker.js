@@ -17,9 +17,10 @@ const baseUrl = new URL('../packages/crystal-wasm/assets/crystal/', self.locatio
 
 // The compiler and the linker both say things that are not about the program:
 // Crystal echoes the link command it *would* have run (`wasm-ld out.o.wasm -o
-// out.o -lc`, which is not the link we do), and lld warns about a signature
-// mismatch between Crystal's `_Unwind_SetIP` binding and libunwind's wasm port
-// (known, benign, and documented).
+// out.o -lc`, which is not the link we do). lld used to warn about Crystal's
+// `_Unwind_SetIP` binding disagreeing with libunwind's wasm port; that is fixed at
+// the source as of @live-codes/crystal-wasm 0.1.1, so this buffering has less to
+// hide than it did.
 //
 // What does belong is a compiler warning *about this program*, which arrives on the
 // compiler's stderr. So build output is buffered rather than streamed, and on

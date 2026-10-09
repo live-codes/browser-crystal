@@ -196,11 +196,13 @@ is `idle`/`running`/`ok`/`error`, `exitCode` is the program's. All eight samples
 headless Chrome. A sample's source lives in a JS template literal, so any backslash in it must be
 doubled and any backtick escaped — the regex sample is the one that bites.
 
-**Start the server with `node serve.mjs`, not `npm start`, when you will have to stop it.**
+**Start the server with `node serve.mjs`, not `npm start`, and stop it when you are done.**
 `npm start` runs node as a *child*: killing the npm process leaves the server listening on 8127,
 the next `npm start` fails to bind, and the old code keeps being served — which presents as a bug
 in the file you just edited (this cost an hour: a `/packages/` route that 404'd because the server
-predated it). Check with `Get-NetTCPConnection -LocalPort 8127 -State Listen`, from PowerShell.
+predated it). The mirror image also bit: a server left running for two hours meant a later start
+died silently, and the page was quietly served by the older process. Check with
+`Get-NetTCPConnection -LocalPort 8127 -State Listen`, from PowerShell.
 
 **Gotcha: don't redirect the WSL command's output from Windows.** `wsl … -- bash x.sh > log`
 puts the log on the *Windows* side; write scripts to files, redirect inside WSL, and read the
@@ -339,10 +341,12 @@ here, which is this machine's link to jsDelivr — 22.8 MB at ~60 KB/s — not t
 
 **What is left, in order:**
 
-1. **The compiler rebuild.** The `_Unwind_SetIP` binding mismatch (§8) is the last known correctness
-   item: it needs a fresh `crystal.wasm` from WSL, a `npm run demo:assets` to re-pin the payload, and
-   therefore a `0.1.1` publish. Small, but it invalidates the shipped receipts — batch anything else
-   into it.
+1. ~~**The compiler rebuild.**~~ **Done — awaiting a publish.** `apply-patches.py` now corrects
+   `LibUnwind.set_ip`'s return type to `Void` (what the Itanium ABI and every libunwind declare; the
+   binding was wrong on every platform, not just wasm), the compiler was rebuilt in WSL, and
+   `npm run demo:assets` re-pinned the payload. The mismatch is **gone from both links** — the
+   compiler's and a program's — which is the warning that started this. `@live-codes/crystal-wasm` is
+   at **0.1.1** in the tree and needs your npm credentials; `@live-codes/llvm-wasm` is unchanged.
 2. **The LiveCodes integration** — the point of all of it, and the one piece that lives in another
    repository: a `lang-crystal` module (an identity `factory`, `scriptType: 'text/crystal'`, the CDN
    `baseUrl`, `largeDownload: true`), in the shape `browser-nim`'s module has. Everything it needs is
@@ -386,10 +390,12 @@ here, which is this machine's link to jsDelivr — 22.8 MB at ~60 KB/s — not t
 §7 — reuse them, don't rediscover them):
 
 - `libdl.a` is an **empty stub** — `dlopen`/`dlclose`/`dlsym`/`dlerror` are stubbed in `compat.c`.
-- The sysroot's `_Unwind_SetIP` returns `void` while Crystal's `LibUnwind` binding says `SizeT`;
-  wasm-ld warns. Harmless — Crystal's personality is never called — and the page hides build
-  chatter, but the binding is simply wrong: `set_ip` should be `Void`. **Scheduled** to be patched
-  into `src/lib_unwind.cr` at the next compiler rebuild (§7), which removes the warning at source.
+- The sysroot's `_Unwind_SetIP` returns `void` while Crystal's `LibUnwind` binding said `SizeT`, so
+  wasm-ld warned on **every program link** — which is where the warning that started this work came
+  from, not the compiler's own link. It was harmless (Crystal calls `set_ip` as a statement and never
+  uses the result) but the binding was simply wrong: the ABI and every libunwind declare `void`.
+  **Fixed in 0.1.1**, by a patch on `exception/lib_unwind.cr` — note the path, since the obvious
+  guess `src/lib_unwind.cr` does not exist.
 - `Crystal::EventLoop::Wasi#open` was a `NotImplementedError`; implemented over `LibC.open`.
 - `exception/call_stack.cr` picks `call_stack/null` on wasm, which does **not** require
   `exception/lib_unwind` and does **not** define `CallStack.print_backtrace`; both were patched.

@@ -534,6 +534,16 @@ CODEGEN_TARGET_EH_METHOD_NEW = """    environment == other.environment
   end
 end"""
 
+# `_Unwind_SetIP` is declared as returning `LibC::SizeT`, but the Itanium ABI -- and
+# every real libunwind, including the wasm build in wasi-sdk -- declares it `void`. That
+# is why wasm-ld says "function signature mismatch: _Unwind_SetIP ... defined as
+# (i32, i32) -> i32 in out.o.wasm, defined as (i32, i32) -> void in libunwind.a": the
+# binding is wrong about the return type, on every platform, not just wasm. Crystal never
+# uses the result (`raise.cr` calls it as a statement), so correcting the declaration
+# removes the warning and the mismatched declaration from the emitted IR.
+UNWIND_SET_IP_OLD = "    fun set_ip = _Unwind_SetIP(context : Context, ip : LibC::SizeT) : LibC::SizeT"
+UNWIND_SET_IP_NEW = "    fun set_ip = _Unwind_SetIP(context : Context, ip : LibC::SizeT) : Void"
+
 # (relative path, old, new, marker) -- marker is a string present only in the
 # patched file, needed when `old` survives inside `new` (pure insertions), so that
 # a second run recognises the patch as applied instead of applying it again.
@@ -551,6 +561,7 @@ PATCHES = [
     ("raise.cr", WASM_RAISE_DEF_END_OLD, WASM_RAISE_DEF_END_NEW, None),
     ("raise.cr", RAISE_REQUIRE_OLD, RAISE_REQUIRE_NEW, '{% unless flag?(:interpreted) %}\n  require "exception/lib_unwind"\n{% end %}'),
     ("exception/call_stack/null.cr", NULL_BACKTRACE_OLD, NULL_BACKTRACE_NEW, "def self.print_backtrace : Nil"),
+    ("exception/lib_unwind.cr", UNWIND_SET_IP_OLD, UNWIND_SET_IP_NEW, None),
     ("compiler/crystal/codegen/exception.cr", MSVC_BRANCH_OLD, MSVC_BRANCH_NEW, "funclet_eh = msvc || wasm_target"),
     ("compiler/crystal/codegen/exception.cr", PERSONALITY_SET_OLD, PERSONALITY_SET_NEW, None),
     ("compiler/crystal/codegen/exception.cr", CODEGEN_RESCUE_OLD, CODEGEN_RESCUE_NEW, None),
