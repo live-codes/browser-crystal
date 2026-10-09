@@ -45,5 +45,19 @@ echo "=== link ==="
 echo "link rc=$?"
 
 echo "=== run ==="
-"$NODE" "$HERE/../llvm-wasm/verify/run-wasi.mjs" exc.wasm
+# The WASI runner lives in the llvm-wasm repository (published as @live-codes/llvm-wasm) now:
+# a checkout beside this repo (`$HERE` is build/crystal-wasm, so `../../..` is its parent), or
+# the installed package.
+RUNNER="${LLVM_WASM:-}"
+if [ -z "$RUNNER" ]; then
+  for candidate in "$HERE/../../../llvm-wasm" "$HERE/../../node_modules/@live-codes/llvm-wasm"; do
+    if [ -f "$candidate/verify/run-wasi.mjs" ]; then RUNNER="$candidate"; break; fi
+  done
+fi
+if [ ! -f "$RUNNER/verify/run-wasi.mjs" ]; then
+  echo "repro.sh: no run-wasi.mjs found. Either set LLVM_WASM, or install the package:" >&2
+  echo "            npm install --save-dev @live-codes/llvm-wasm" >&2
+  exit 1
+fi
+"$NODE" "$RUNNER/verify/run-wasi.mjs" exc.wasm
 echo "run rc=$?"

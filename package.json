@@ -6,10 +6,12 @@
   "license": "MIT",
   "description": "The Crystal compiler, running in the browser: edit Crystal, then compile, link and run it in the tab with no server",
   "scripts": {
-    "build:llvm-wasm": "bash build/llvm-wasm/build.sh",
     "demo:assets": "bash packages/crystal-wasm/build-assets.sh",
     "start": "node serve.mjs",
     "test": "npm test --prefix packages/crystal-wasm",
     "check": "node --check serve.mjs && node --check public/demo-worker.js && node --check packages/crystal-wasm/src/api.js && node --check packages/crystal-wasm/src/assets.js && node --check packages/crystal-wasm/src/engine.js && node --check packages/crystal-wasm/src/loader.js && node --check packages/crystal-wasm/src/index.js && node --check packages/crystal-wasm/src/index.node.js && node --check packages/crystal-wasm/src/packaged.node.js && node --check packages/crystal-wasm/bin/copy-assets.mjs && node --check packages/crystal-wasm/scripts/check-assets.mjs && node --check packages/crystal-wasm/scripts/write-receipts.mjs"
+  },
+  "devDependencies": {
+    "@live-codes/llvm-wasm": "^0.1.0"
   }
 }

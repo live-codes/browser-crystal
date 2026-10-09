@@ -1,12 +1,12 @@
 # Crossing the Crystal compiler to wasm
 
 This is where the **"validate, then split"** plan ran: build the Crystal
-compiler itself as a `wasm32-wasip1` module, linked against the libLLVM produced
-in [`../llvm-wasm`](../llvm-wasm). It linked, so the libLLVM's interface is proven
-by a real consumer — and the split has since happened: the libLLVM lives in
-[its own repository](https://github.com/live-codes/llvm-wasm) as
-`@live-codes/llvm-wasm`, and `link.sh` links against whichever copy it is pointed at
-(`$LLVM_WASM`, else the in-repo copy, else the installed package).
+compiler itself as a `wasm32-wasip1` module, linked against the libLLVM the
+[`llvm-wasm`](https://github.com/live-codes/llvm-wasm) repository produces. It linked,
+so the libLLVM's interface is proven by a real consumer — and the split has since
+happened: the libLLVM is published as `@live-codes/llvm-wasm`, and `link.sh` links
+against whichever copy it is pointed at (`$LLVM_WASM`, else a checkout beside this
+repo, else the installed package).
 
 **Status: the compiler runs, reads the stdlib, and compiles a program to a wasm
 object that links and runs — exceptions included.** (See "Resolution" below; the
@@ -49,7 +49,7 @@ Default target: wasm32-unknown-wasip1
 ```
 
 `crystal.wasm` is 94 MB — a 60 MB wasm object linked against
-`../llvm-wasm/out/lib/*.a`, a wasm PCRE2, and the compat layer. It reports
+the llvm-wasm package's `out/lib/*.a`, a wasm PCRE2, and the compat layer. It reports
 **LLVM 20.1.8**, i.e. our wasm libLLVM rather than the host's 18, and its
 default target is the wasm triple.
 
@@ -643,10 +643,10 @@ clang --target=wasm32-wasip1 --sysroot=/opt/wasi-sdk-33/share/wasi-sysroot \
   -O1 -nostartfiles -fwasm-exceptions -o out.wasm out.o.wasm \
   -L/root/bc-pcre2/build -lpcre2-8 -lc++ -lc++abi -lunwind \
   -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-getpid -lwasi-emulated-process-clocks
-node build/llvm-wasm/verify/run-wasi.mjs out.wasm       # hello from the wasm Crystal compiler
+node node_modules/@live-codes/llvm-wasm/verify/run-wasi.mjs out.wasm   # hello from the wasm Crystal compiler
 ```
 
 The cross-compile on its own still prints the wasm *object* plus the link command
 Crystal would have run; the real link is done by hand with wasi-sdk against
-`../llvm-wasm/out/lib/*.a`, the compat stubs, and PCRE2 — exactly as
-`../llvm-wasm/verify/run-probe.sh` links the LLVM probe.
+the llvm-wasm package's `out/lib/*.a`, the compat stubs, and PCRE2 — exactly as
+that package's `verify/run-probe.sh` links the LLVM probe.

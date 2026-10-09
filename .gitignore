@@ -1,17 +1,11 @@
-# libLLVM for wasm (build/llvm-wasm/): the source tarball, host tblgen and the
-# cross build tree live under WORK/CACHE outside the repo; only the packaged
-# result lands in out/, and it is committed deliberately (~140 MB) so a clone can
-# link the compiler without rebuilding LLVM. `npm run build:llvm-wasm` (Linux or
-# WSL) regenerates it.
-# build/llvm-wasm/out/
+# node_modules, in case you installed the libLLVM package in order to rebuild the compiler
+# (`npm install --save-dev @live-codes/llvm-wasm`). The page and the language package need
+# nothing installed; this is a build-time dependency of the compiler pipeline.
+node_modules/
 
-# Python bytecode from patches/apply-patches.py
+# Python bytecode from patches/apply-patches.py, which lives in the llvm-wasm repository now.
 __pycache__/
 *.pyc
-
-# Outputs of verify/run-probe.sh (regenerated on every verify)
-build/llvm-wasm/verify/*.o
-build/llvm-wasm/verify/*.wasm
 
 # The language package's payload (packages/crystal-wasm/build-assets.sh): about 22 MB
 # gzipped — the compiler (12 MB of it), the linker (8 MB), the standard library

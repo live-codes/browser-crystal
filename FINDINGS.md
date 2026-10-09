@@ -272,8 +272,9 @@ and its element ids as globals, so the checks can read state and click Run witho
 
 A later effort stopped waiting for the missing artifact and built it: `libLLVM` compiled to
 `wasm32-wasip1`, the one thing Crystal's compiler has to link and that existed nowhere to
-download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its status is
-[`build/llvm-wasm/STATUS.md`](build/llvm-wasm/STATUS.md).
+download. That pipeline now lives in
+[its own repository](https://github.com/live-codes/llvm-wasm), published as
+`@live-codes/llvm-wasm` — this repo installs it rather than carrying it.
 
 - **It works.** LLVM **20.1.8** — the newest release Crystal 1.17 accepts — builds for
   `wasm32-wasip1` with wasi-sdk 33 (clang 22), WebAssembly backend only: **99 static archives**,
@@ -282,10 +283,10 @@ download. The pipeline is in [`build/llvm-wasm/`](build/llvm-wasm/); its status 
   capability this whole question turned on. That artifact did not exist anywhere to download;
   it does now, reproducibly.
 - **It was a port, not a build.** LLVM's Unix support layer assumes an operating system that WASI
-  preview 1 is not. Every edit is in `build/llvm-wasm/patches/apply-patches.py`; the POSIX surface
-  wasi-libc omits entirely (`sigaction`, `sigset_t`, `rlimit`, `<sys/wait.h>`,
-  `fork`/`exec`/`wait`, `pwd`, `Dl_info`/`dladdr`, `fcntl` locks) is declared in
-  `build/llvm-wasm/wasi-compat/include/` and stubbed in `wasi-compat/compat.c`. On WASI those
+  preview 1 is not. Every edit is in the llvm-wasm repository's `patches/apply-patches.py`; the POSIX
+  surface wasi-libc omits entirely (`sigaction`, `sigset_t`, `rlimit`, `<sys/wait.h>`,
+  `fork`/`exec`/`wait`, `pwd`, `Dl_info`/`dladdr`, `fcntl` locks) is declared in its
+  `wasi-compat/include/` and stubbed in `wasi-compat/compat.c`. On WASI those
   stubs cannot do real work — there are no processes, signals or sockets — but a compiler does
   not need them to.
 - **§2 is revised, not overturned.** Crystal's *own* compiler still cannot run in a browser

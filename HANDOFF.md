@@ -31,9 +31,9 @@ Windows path and run `wsl -d racket-build -- bash /mnt/c/.../script.sh`.
 (`bash x.sh > /root/log 2>&1`) and read that file; the tool's own task log is frequently empty.
 
 **The network is hostile to big downloads from GitHub** (~20 KB/s, and connections reset
-mid-transfer). `git ls-remote`/`git clone` are fine; for release assets use
-`build/llvm-wasm/fetch.sh` (parallel ranged download with per-chunk resume). One 194 MB tarball
-took ~20 minutes with it.
+mid-transfer). `git ls-remote`/`git clone` are fine; for release assets use `fetch.sh` — it lives in
+the llvm-wasm repository and package now (`node_modules/@live-codes/llvm-wasm/fetch.sh`) and does a
+parallel ranged download with per-chunk resume. One 194 MB tarball took ~20 minutes with it.
 
 Do not modify `D:\DevWork\live-codes\clang-wasm`; reading/using its assets is fine.
 
@@ -77,17 +77,10 @@ default `llvm-config` on PATH is 21, which it does not).
 ## 4. Repo layout
 
 ```
-build/llvm-wasm/          libLLVM-for-wasm pipeline — NOW ITS OWN REPO as @live-codes/llvm-wasm
-                          (D:\DevWork\live-codes\llvm-wasm, §7); this copy stays until that
-                          package is published, and link.sh can use either
-  build.sh                  fetch → host tblgen → cross → pack → verify
-  fetch.sh                  parallel, resumable download (the network needs it)
-  toolchain-wasi.cmake      the wasm32-wasip1 cross toolchain
-  patches/apply-patches.py  every LLVM source edit, idempotent and commented
-  wasi-compat/              declarations + stub definitions for what WASI lacks
-  verify/                   the C-API probe (link + run under Node WASI)
-  out/                      99 archives + headers — COMMITTED (~140 MB, deliberately)
-  STATUS.md, README.md, llvm-wasm.lock.json
+(the libLLVM-for-wasm pipeline and its 99 archives are **not here**: they are the
+`llvm-wasm` repository, published as `@live-codes/llvm-wasm` — D:\DevWork\live-codes\llvm-wasm,
+§7. This repo installs it as a devDependency and `link.sh` finds it in node_modules, or in a
+checkout beside this one.)
 
 build/crystal-wasm/       the Crystal compiler pipeline
   cross-compile.sh          patches a source copy, cross-compiles compiler/crystal.cr
@@ -125,11 +118,14 @@ FINDINGS.md               §9 = libLLVM, §10 = the compiler
 
 ## 5. How to run each stage
 
-**libLLVM** (already built; rebuilding is on the order of an hour):
+**libLLVM** — not built here any more. It is a package
+([`llvm-wasm`](https://github.com/live-codes/llvm-wasm), published as `@live-codes/llvm-wasm`), which
+this repo installs as a devDependency rather than carrying. To *rebuild* it — on the order of an
+hour — clone that repository and run its `build.sh` there:
 
 ```bash
-WASI_SDK=/opt/wasi-sdk-33 bash build/llvm-wasm/build.sh          # all stages
-STAGE=verify WASI_SDK=/opt/wasi-sdk-33 bash build/llvm-wasm/build.sh
+WASI_SDK=/opt/wasi-sdk-33 bash build.sh          # all stages, in the llvm-wasm checkout
+STAGE=verify WASI_SDK=/opt/wasi-sdk-33 bash build.sh
 ```
 
 **The Crystal compiler, end to end** — the whole sequence, from a clean patched source copy:
@@ -176,7 +172,7 @@ cd /root/bc-crystal && export CRYSTAL_PATH=/root/bc-crystal/src
   --sysroot=/opt/wasi-sdk-33/share/wasi-sysroot -O1 -nostartfiles -fwasm-exceptions \
   -o exc.wasm exc.o.wasm -lc++ -lc++abi -lunwind \
   -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-getpid -lwasi-emulated-process-clocks
-/root/emsdk/node/24.19.0_64bit/bin/node build/llvm-wasm/verify/run-wasi.mjs exc.wasm
+/root/emsdk/node/24.19.0_64bit/bin/node node_modules/@live-codes/llvm-wasm/verify/run-wasi.mjs exc.wasm
 ```
 
 `llvm-objdump` from wasi-sdk disassembles wasm and is the tool that cracked the last step:
@@ -296,18 +292,18 @@ and only a build machine ever wants it: libLLVM-for-wasm.
    their `.gz` (`lib/libc.a`), because those keys become paths in the linker's filesystem; and a
    caller's `toolchain` replaces only the *linker* (its lld is the same program), while the sysroot
    libraries still come from this package.
-2. ~~**`@live-codes/llvm-wasm`**~~ **Extracted — done, except publishing.** The pipeline and the
-   141 MB of archives are now their own repository, `D:\DevWork\live-codes\llvm-wasm` (first commit
-   `4b4558a`, 2279 files), with a `package.json` for `@live-codes/llvm-wasm`, a `llvm-wasm-path` bin
+2. ~~**`@live-codes/llvm-wasm`**~~ **Done.** The pipeline and its archives are their own
+   repository, `D:\DevWork\live-codes\llvm-wasm`, **published as `@live-codes/llvm-wasm@0.1.0`**,
+   with a `package.json`, a `llvm-wasm-path` bin
    so a build script can find them, a `prepack` check that refuses an incomplete `out/`, and the
    licences. **It is verified against the real consumer**: with `LLVM_WASM` pointing at the new
    repository, `link.sh` resolves every symbol, and the compiler it produces runs and reports
    `LLVM: 20.1.8` — i.e. those are the archives, not a copy that happens to be the right size.
 
-   What is left: (a) **publishing** it, and (b) **deleting this repo's `build/llvm-wasm/`** — which
-   waits on (a), because a fresh clone cannot install a package that is not on npm. `link.sh`
-   resolves in order `$LLVM_WASM`, then the in-repo copy, then the installed package, so both
-   states work and the deletion is a one-line follow-up.
+   **Both follow-ups are done:** it is published, and this repo's `build/llvm-wasm/` copy is
+   deleted — 2273 files, the ~140 MB that made a clone awkward — because a fresh clone can install
+   what it needs. `link.sh` resolves in order `$LLVM_WASM`, a checkout beside this one, then the
+   installed package; verified by linking the compiler from an install with nothing unpacked.
 
    Shape: the archives ship **gzipped, one file each** (`out/lib/*.a.gz`), which is the only form a
    page can use — `DecompressionStream` does gzip and nothing else, and one file per archive means a
@@ -336,8 +332,21 @@ all of this is the page, so the shape of each payload is decided by what a page 
   HTTP (`npm test` there), and the same archives, packed into the tarball, extracted elsewhere and
   unpacked, still link the compiler.
 
-One small item folds into the next rebuild: the `_Unwind_SetIP` binding mismatch (§8), which needs a
-fresh `crystal.wasm` and a re-pin.
+**Both published packages load from a CDN in a browser, and that is verified, not assumed.** A page
+on one origin imported the published entry from jsDelivr (`access-control-allow-origin: *`), pulled
+all 22.8 MB from the CDN and ran a program: `caught: boom`, exit 0, no errors. (It took six minutes
+here, which is this machine's link to jsDelivr — 22.8 MB at ~60 KB/s — not the package.)
+
+**What is left, in order:**
+
+1. **The compiler rebuild.** The `_Unwind_SetIP` binding mismatch (§8) is the last known correctness
+   item: it needs a fresh `crystal.wasm` from WSL, a `npm run demo:assets` to re-pin the payload, and
+   therefore a `0.1.1` publish. Small, but it invalidates the shipped receipts — batch anything else
+   into it.
+2. **The LiveCodes integration** — the point of all of it, and the one piece that lives in another
+   repository: a `lang-crystal` module (an identity `factory`, `scriptType: 'text/crystal'`, the CDN
+   `baseUrl`, `largeDownload: true`), in the shape `browser-nim`'s module has. Everything it needs is
+   published now.
 
 **Facts from the finished work, worth keeping** — they are in the log, not visible in the code:
 
@@ -373,7 +382,8 @@ fresh `crystal.wasm` and a re-pin.
 
 ## 8. Everything learned the hard way
 
-**WASI gaps** (all live in `build/llvm-wasm/wasi-compat/`; reuse them, don't rediscover them):
+**WASI gaps** (in the llvm-wasm package's `wasi-compat/` — that pipeline is its own repository now,
+§7 — reuse them, don't rediscover them):
 
 - `libdl.a` is an **empty stub** — `dlopen`/`dlclose`/`dlsym`/`dlerror` are stubbed in `compat.c`.
 - The sysroot's `_Unwind_SetIP` returns `void` while Crystal's `LibUnwind` binding says `SizeT`;
@@ -469,9 +479,10 @@ e6f8dd1  initial commit
   `npm pack <dir> --dry-run` (sizes and file count), and the largest files in a repository with
   `cd <repo> && git ls-files -z | xargs -0 stat -c '%s %n' | sort -rn | head`. The way to break it
   is to ship the plain archives again: `files` must list `out/lib/*.a.gz`, never `out/lib`.
-- `build/llvm-wasm/out/` is ~140 MB and **committed on purpose** by the user. Don't "clean" it — and
-  note that it now has a second home: the `llvm-wasm` repository it was extracted to (§7), which
-  keeps the same files and adds the package around them.
+- **`build/llvm-wasm/` is gone from this repository** — 2273 files, ~140 MB, deleted once
+  `@live-codes/llvm-wasm` was published (§7). The pipeline and the archives live there now, and this
+  repo installs the package as a devDependency. Note that git *history* still carries the blobs, so
+  a fresh clone is no smaller unless the user chooses to rewrite it.
 - `packages/crystal-wasm/assets/crystal/` (the payload, ~22 MB gzipped) is **not** committed —
   regenerate it with `npm run demo:assets` (or `npm run assets` inside the package) and re-pin with
   `node scripts/write-receipts.mjs`. The receipts in `src/asset-receipts.js` *are* committed, and

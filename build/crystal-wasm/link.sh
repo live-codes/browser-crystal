@@ -21,15 +21,18 @@ OUT="${OUT:-/root/bc-crystal}"
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk-33}"
 PCRE_LIB="${PCRE_LIB:-/root/bc-pcre2/build}"   # wasm libpcre2-8.a, from build-pcre2.sh
 
+# Where the libLLVM is: an explicit `$LLVM_WASM` wins, then a checkout of the llvm-wasm
+# repository beside this repo (`../..` from build/crystal-wasm is this repo, so `../../..` is
+# its parent), then the installed package (`npm install --save-dev @live-codes/llvm-wasm`).
 if [ -z "${LLVM_WASM:-}" ]; then
-  for candidate in "$HERE/../llvm-wasm" "$HERE/../../node_modules/@live-codes/llvm-wasm"; do
+  for candidate in "$HERE/../../../llvm-wasm" "$HERE/../../node_modules/@live-codes/llvm-wasm"; do
     if [ -d "$candidate/out/lib" ]; then LLVM_WASM="$candidate"; break; fi
   done
 fi
 if [ -z "${LLVM_WASM:-}" ] || [ ! -d "$LLVM_WASM/out/lib" ]; then
-  echo "link.sh: no libLLVM found. Set LLVM_WASM, install @live-codes/llvm-wasm," >&2
-  echo "         unpack it (npx llvm-wasm-unpack) if lifecycle scripts were skipped," >&2
-  echo "         or keep build/llvm-wasm/ (its out/lib has the archives)." >&2
+  echo "link.sh: no libLLVM found. Either set LLVM_WASM, or install the package:" >&2
+  echo "           npm install --save-dev @live-codes/llvm-wasm" >&2
+  echo "         A checkout of the llvm-wasm repository beside this one works too." >&2
   exit 1
 fi
 

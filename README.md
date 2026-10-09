@@ -20,10 +20,11 @@ in the same shape as [`browser-cobol`](https://github.com/live-codes/browser-cob
 required work that existed nowhere else:
 
 - **a libLLVM for `wasm32-wasip1`** — Crystal links LLVM, and no wasm build of it existed to
-  download. It does now: [`build/llvm-wasm/`](build/llvm-wasm/), 99 archives, verified — and it
-  lives in [its own repository](https://github.com/live-codes/llvm-wasm) as the
-  `@live-codes/llvm-wasm` package, so other LLVM-based ports can reuse it. Its archives ship
-  gzipped one file per archive, so a page can fetch and inflate them too.
+  download. It does now: 99 archives, verified, in
+  [its own repository](https://github.com/live-codes/llvm-wasm) as the
+  [`@live-codes/llvm-wasm`](https://www.npmjs.com/package/@live-codes/llvm-wasm) package, so other
+  LLVM-based ports can reuse it. Its archives ship gzipped one file per archive, so a page can
+  fetch and inflate them too.
 - **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
   every source edit in one idempotent `apply-patches.py`.
 - **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
@@ -61,8 +62,10 @@ that way (entry imported by URL, a program compiled and run). The same goes for
 [`@live-codes/llvm-wasm`](https://github.com/live-codes/llvm-wasm), whose archives a page can fetch
 and inflate one at a time.
 
-There is no `npm install`: neither the page nor the package has a dependency, and the one piece of
-third-party host code (the WASI shim) is vendored into `packages/crystal-wasm/vendor/`.
+There is no `npm install` for the page or the package: neither has a dependency, and the one piece
+of third-party host code (the WASI shim) is vendored into `packages/crystal-wasm/vendor/`. Only
+*rebuilding the compiler* needs one — `npm install --save-dev @live-codes/llvm-wasm`, for the
+libLLVM it links against.
 
 ## The demo
 
@@ -144,10 +147,13 @@ package's `build-assets.sh`; their bytes are pinned in the package's
 ```
 public/                     the page and its worker
 packages/crystal-wasm/      the language package: compile → link → run, assets, tests, docs
-build/llvm-wasm/            libLLVM for wasm32-wasip1 (99 archives, ~140 MB, committed on
-                            purpose); extracted to the llvm-wasm repository as a package
 build/crystal-wasm/         the compiler pipeline, and the lld/exception notes
 ```
+
+The libLLVM that the compiler links, and the pipeline that builds it, live in
+[`llvm-wasm`](https://github.com/live-codes/llvm-wasm) as a package: this repository installs it
+(`npm install --save-dev @live-codes/llvm-wasm`) rather than carrying a 140 MB copy. `link.sh`
+finds it either there or in a checkout beside this one.
 
 ## Licensing and provenance
 
@@ -155,7 +161,8 @@ MIT for the code here, and for the Crystal standard library that ends up inside 
 (Crystal is Apache-2.0; the compiled artifacts embed its runtime).
 
 - **Crystal 1.17.0** — Apache-2.0 — the compiler's own source, patched by `apply-patches.py`.
-- **LLVM 20.1.8** — Apache-2.0 WITH LLVM-exception — built for wasm32-wasip1 in `build/llvm-wasm/`.
+- **LLVM 20.1.8** — Apache-2.0 WITH LLVM-exception — built for wasm32-wasip1 by the
+  [`llvm-wasm`](https://github.com/live-codes/llvm-wasm) pipeline.
 - **wasi-sdk 33** (clang, wasm-ld's libraries, the sysroot) — Apache-2.0 WITH LLVM-exception / MIT.
 - **PCRE2** — BSD-3-Clause — built for wasm32-wasi, for `Regex`.
 - **`lld.wasm`** comes from [`clang-wasm`](https://github.com/live-codes/clang-wasm) (LLVM 22,

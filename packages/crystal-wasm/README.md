@@ -157,7 +157,8 @@ was passed in.
 
 `build-assets.sh` and `docs/ASSETS.md` — the assets are build outputs of
 [the browser-crystal repository](https://github.com/live-codes/browser-crystal)
-(`build/crystal-wasm/` and `build/llvm-wasm/`), and `scripts/write-receipts.mjs` pins
+(`build/crystal-wasm/`, and the [`llvm-wasm`](https://github.com/live-codes/llvm-wasm) package the
+compiler links against), and `scripts/write-receipts.mjs` pins
 their bytes.
 
 ## Licence

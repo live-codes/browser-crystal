@@ -21,7 +21,23 @@ TARBALL="pcre2-$VER.tar.gz"
 URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-$VER/$TARBALL"
 
 mkdir -p "$WORK" "$CACHE"
-bash "$REPO/build/llvm-wasm/fetch.sh" "$URL" "$CACHE/$TARBALL" "$BYTES" 8
+
+# fetch.sh — the parallel, resumable downloader — lives in the llvm-wasm repository, which is
+# published as @live-codes/llvm-wasm and no longer vendored here: a checkout beside this one,
+# or the installed package.
+FETCH="${LLVM_WASM:-}"
+if [ -z "$FETCH" ]; then
+  for candidate in "$REPO/../llvm-wasm" "$REPO/node_modules/@live-codes/llvm-wasm"; do
+    if [ -f "$candidate/fetch.sh" ]; then FETCH="$candidate"; break; fi
+  done
+fi
+if [ ! -f "$FETCH/fetch.sh" ]; then
+  echo "build-pcre2.sh: no fetch.sh found. Either set LLVM_WASM, or install the package:" >&2
+  echo "                  npm install --save-dev @live-codes/llvm-wasm" >&2
+  exit 1
+fi
+
+bash "$FETCH/fetch.sh" "$URL" "$CACHE/$TARBALL" "$BYTES" 8
 [ -d "$WORK/pcre2-$VER" ] || tar -xzf "$CACHE/$TARBALL" -C "$WORK"
 
 cmake -G Ninja -S "$WORK/pcre2-$VER" -B "$WORK/build" \

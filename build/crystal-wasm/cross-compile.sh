@@ -1,6 +1,6 @@
 #!/bin/bash
 # cross-compile.sh — build compiler/crystal.cr for wasm32-unknown-wasi, against
-# the wasm libLLVM in ../llvm-wasm/out.
+# the wasm libLLVM from the llvm-wasm package (@live-codes/llvm-wasm).
 #
 # Run on Linux/WSL with a native Crystal (the distribution's own source is used).
 # This is the beginning of the port, not a finished pipeline.
@@ -48,7 +48,7 @@ chmod +x "$OUT/llvm-config"
 export LLVM_CONFIG="$OUT/llvm-config"
 export LLVM_VERSION=20.1.8
 export LLVM_TARGETS=WebAssembly
-export LLVM_LDFLAGS=""   # the real link is done by hand with wasi-sdk + ../llvm-wasm/out/lib
+export LLVM_LDFLAGS=""   # the real link is done by hand: wasi-sdk + the llvm-wasm package's out/lib
 
 cd "$SRC" || exit 1
 

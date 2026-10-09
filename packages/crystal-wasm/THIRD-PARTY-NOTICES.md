@@ -10,7 +10,7 @@ two pieces of code that are redistributed verbatim.
 | component | version | licence | what it is |
 | --- | --- | --- | --- |
 | **Crystal compiler and standard library** | 1.17.0 | Apache-2.0 | `compiler.wasm` is the compiler's own source, cross-compiled for wasm (patched — see [the browser-crystal repository](https://github.com/live-codes/browser-crystal) `build/crystal-wasm/apply-patches.py`). `stdlib.json` is its standard library as source. |
-| **LLVM** | 20.1.8 | Apache-2.0 WITH LLVM-exception | Linked into `compiler.wasm` (libLLVM, built for wasm in `build/llvm-wasm/`). |
+| **LLVM** | 20.1.8 | Apache-2.0 WITH LLVM-exception | Linked into `compiler.wasm` (libLLVM, built for wasm by the [`llvm-wasm`](https://github.com/live-codes/llvm-wasm) pipeline). |
 | **wasi-libc** | as shipped with wasi-sdk 33 | MIT OR Apache-2.0 WITH LLVM-exception | `lib/libc.a`, the WASI emulation archives, and `lib/libclang_rt.builtins.a`. |
 | **libc++abi and libunwind** | as shipped with wasi-sdk 33 | Apache-2.0 WITH LLVM-exception | `lib/eh/*.a` — the wasm exception-handling runtime a compiled program needs (the personality function and `_Unwind_*`). `libc++.a` itself is not shipped: a Crystal program is not C++. |
 | **lld (LLVM's linker)** | 22, from [clang-wasm](https://github.com/live-codes/clang-wasm) | Apache-2.0 WITH LLVM-exception | `lld.wasm`, run as `wasm-ld` to link the object the compiler emits. |

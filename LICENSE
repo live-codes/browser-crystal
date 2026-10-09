@@ -31,10 +31,11 @@ and standard library, which are Apache-2.0:
 - LLVM (linked into the compiler, and into the linker the page runs): Apache-2.0
   WITH LLVM-exception
 
-The toolchain that produces them lives in `build/` — patched sources and scripts,
-not redistributed here: Crystal 1.17.0 from the official distribution, wasi-sdk 33
-for `wasm-ld` and the WASI sysroot, PCRE2 built from source for wasm, and the
-libLLVM-for-wasm built in `build/llvm-wasm/`. The one third-party component
-vendored into the package is `@bjorn3/browser_wasi_shim`, under
+The toolchain that produces them lives in `build/crystal-wasm/` — patched sources and
+scripts, not redistributed here: Crystal 1.17.0 from the official distribution, wasi-sdk 33
+for `wasm-ld` and the WASI sysroot, and PCRE2 built from source for wasm. The libLLVM the
+compiler links against is built by the
+[`llvm-wasm`](https://github.com/live-codes/llvm-wasm) repository. The one third-party
+component vendored into the package is `@bjorn3/browser_wasi_shim`, under
 `packages/crystal-wasm/vendor/` with its own licence files; the package's
 THIRD-PARTY-NOTICES.md is the authoritative list of what it ships.
