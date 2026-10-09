@@ -27,7 +27,7 @@ libLLVM port.
 4. **The stdlib the compiler itself uses** made to compile for `wasm32` — `File`,
    `Dir`, `Process`, the event loop. This is the open-ended part.
 5. **A runtime host**: an in-memory filesystem to read sources and write emitted
-   objects, plus `lld` to link them — the same problem `wasi-preview1.js` solves
+   objects, plus `lld` to link them — the same problem the page's WASI host solves
    for running programs, one level up.
 
 ## Where it stands
@@ -54,8 +54,8 @@ That is the validation the split decision was waiting for, and more: the libLLVM
 is sufficient for a real, *running* consumer. What remains is not the compiler
 binary but the environment it needs in order to compile something — a filesystem
 holding the standard library and the sources, and `lld` to link what it emits.
-That is the same problem `public/wasi-preview1.js` solves for running programs,
-one level up.
+That was the same problem the page's WASI host solved for running programs, one
+level up — and it is solved below, in the demo.
 
 | Blocker | State |
 | --- | --- |
@@ -80,8 +80,8 @@ PCRE2, otherwise it probes the *host's* `pkg-config` for `libpcre2-8` and falls
 back to PCRE1. Cross-compiling, it fell back to PCRE1 — so the object references
 `pcre_compile`, `pcre_exec`, `pcre_fullinfo`, `pcre_study`, `pcre_free`,
 `pcre_get_stringtable_entries`. Either engine works, but the matching PCRE has to
-be built for `wasm32-wasip1`; `../llvm-wasm` already knows how to cross-build
-PCRE2 (its `build/Dockerfile` does it) if PCRE2 is the one wanted.
+be built for `wasm32-wasip1`; `build-pcre2.sh` does exactly that, and PCRE2 is the
+one the demo links.
 
 ### After PCRE
 
@@ -463,10 +463,10 @@ came from wasi-sdk-33 directly.
 
 ## The demo — the whole chain behind an editor
 
-`public/demo.html` is this pipeline as a page you can type into:
+`public/index.html` is this pipeline as a page you can type into:
 
 ```
-public/demo.html        the editor, Run/Stop, output, phase timings, and a stdin box
+public/index.html       the editor, Run/Stop, output, phase timings, and a stdin box
 public/demo-worker.js   fetches and compiles the assets once, then drives a run
 public/crystal-demo.js  compile → link → run; no browser-only API
 public/vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs

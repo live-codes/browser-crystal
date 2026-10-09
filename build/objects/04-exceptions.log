@@ -1,8 +1,0 @@
-wasm-ld build/objects/04-exceptions.o.wasm -o build/objects/04-exceptions.o  -lc -L/usr/bin/../lib/crystal
-In /usr/share/crystal/src/crystal/event_loop/wasi.cr:43:12
-
- 43 | def open(filename : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
-               ^-------
-Warning: positional parameter 'filename' corresponds to parameter 'path' of the overridden method Crystal::EventLoop::FileDescriptor#open(path : String, flags : Int32, permissions : File::Permissions, blocking : Bool | ::Nil), which has a different name and may affect named argument passing
-
-A total of 1 warnings were found.

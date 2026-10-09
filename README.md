@@ -1,8 +1,8 @@
 # browser-crystal
 
-Run **real Crystal in the browser**. The interesting page is
-[`public/demo.html`](public/demo.html): edit the source, press Run, and the whole toolchain runs
-in the tab —
+Run **real Crystal in the browser**. There is one page —
+[`public/index.html`](public/index.html) — and it is the whole thing: edit Crystal, press Run, and
+the toolchain runs in the tab —
 
 ```
 your Crystal source
@@ -33,15 +33,15 @@ everything learned the hard way — **start there if you are picking this up**.
 ## Run it
 
 ```bash
-npm run demo:assets   # once — build the demo's payload (Linux or WSL; downloads 23 MB)
-npm start             # → http://localhost:8127/demo.html
+npm run demo:assets   # once — build the payload (Linux or WSL; about 22 MB of assets)
+npm start             # → http://localhost:8127/
 ```
 
 `npm run demo:assets` collects the compiler, the linker, the standard library and the sysroot
 archives into `public/crystal-demo/`, gzipped, which is gitignored — they are far too large to
 commit and building them is a long pipeline whose result is reproducible. The page inflates them
-itself (`DecompressionStream`), so any static host works. Without them the demo loads and reports
-what is missing; the samples page works either way.
+itself (`DecompressionStream`), so any static host works. Without them the page loads and reports
+what is missing.
 
 A static server is required — ES modules and Workers do not load over `file://` — but it is a plain
 file server and compiles nothing. `serve.mjs` sends `Content-Type: application/wasm`, without which
@@ -52,33 +52,32 @@ There is no `npm install`: the page has no dependencies, and the one piece of th
 
 ## The demo
 
-<p align="center"><img src="docs/demo.png" alt="The demo page after compiling and running the exceptions sample: the editor on the left, and on the right the compiler's and linker's dimmed output followed by 5, caught: cannot divide 1 by zero, done" width="1000"></p>
+<p align="center"><img src="docs/demo.png" alt="The demo page after compiling and running the regular-expressions sample: the editor on the left, and on the right the output — five-letter words: quick, brown, jumps; digit runs: 123, 456; hashed: the-quick-brown-fox-jumps-over-the-lazy-dog" width="1000"></p>
 
-`public/demo.html` is an editable editor over one worker. Everything slow or unkillable happens in
-the worker, so Stop throws it away and the page survives it.
+The page is an editable editor over one worker. Everything slow or unkillable happens in the worker,
+so Stop throws it away and the page survives it. Eight samples ship with it, and they are compiled
+by the compiler on the page like anything else you type: strings and interpolation, exceptions,
+arrays/hashes/blocks, structs/classes/modules/operator overloading, `Int32?` unions and
+`case … when Nil`, `gets` over `fd_read` (the stdin box), and `Regex` (PCRE2, built for wasm).
 
 | file | what it is |
 | --- | --- |
-| `public/demo.html` | the page: editor, Run/Stop, output, phase timings |
+| `public/index.html` | the page: editor, Run/Stop, output, stdin box, phase timings |
 | `public/demo-worker.js` | fetches and compiles the assets once, then drives a run |
 | `public/crystal-demo.js` | compile → link → run, in ~200 lines; the same code runs in Node |
 | `public/vendor/browser_wasi_shim/` | the WASI host, and the filesystem the compiler needs |
 
-First run is slow — it downloads 23 MB of gzipped assets and compiles a 35 MB wasm module — and
-later runs reuse the compiled modules, so only the user's program is compiled. Measured in headless
-Chrome: **4.3 s for the first run, 2.0 s after**. (It was 16 s and 10–15 s until the WASI host's
-file writes were fixed: writing an object file was quadratic. See
-[build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went).)
+First run is slow — it downloads about 22 MB of gzipped assets and compiles a 35 MB wasm module —
+and later runs reuse the compiled modules, so only the user's program is compiled. Measured in
+headless Chrome: **4.3 s for the first run, 2.0 s after** (each of the eight samples compiles in
+1.7–3.1 s). It was 16 s and 10–15 s until the WASI host's file writes were fixed: writing an object
+file was quadratic. See
+[build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went).
 
 The output pane is the *program's* output. The compiler's and the linker's own chatter is buffered
 and not shown — Crystal echoes the link command it would have run, and lld warns about a known,
 benign `_Unwind_SetIP` signature mismatch in libunwind's wasm port. A warning *about your code* and
 a failed build's diagnostics still appear.
-
-`public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
-smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
-still there because it is the cheap path — no assets to build, and it runs Crystal on a plain
-origin.
 
 ## What works
 
@@ -87,18 +86,17 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 - **Compiling and running what you type**, in the tab — including `begin`/`rescue`/`ensure`, which
   is what the exception work was for, and a stdin box, so a program that calls `gets` reads what you
   type into it. `test/demo.mjs` checks the same code path under Node.
-- **The precompiled samples** (`public/index.html`): strings and interpolation, arrays/hashes/blocks,
-  structs/classes/modules/operator overloading, `Int32?` unions and `case … when Nil`, `gets` over
-  `fd_read`, and `Regex` (PCRE2, built for wasm).
+- **All eight samples**, which between them cover the language surface above — in particular the
+  regex sample, which is the one that needs a library wasi-libc does not carry.
 - Program output streams as it is produced, and programs run off the main thread.
 
 ## What does not work
 
 | | why |
 | --- | --- |
-| **A small first load** | 23 MB gzipped. 11.8 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm — and 7.8 MB is the linker, which is a *generic* lld (ELF, COFF, Mach-O and wasm). A wasm-only lld was built from our own LLVM source and is *not* smaller: lld's LTO support is not separable by a flag. See [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted). |
+| **A small first load** | 22 MB gzipped. 12 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm — and 7.8 MB is the linker, which is a *generic* lld (ELF, COFF, Mach-O and wasm). A wasm-only lld was built from our own LLVM source and is *not* smaller: lld's LTO support is not separable by a flag. See [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted). |
 | **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
-| **`Regex` in a compiled program** | it needs `libpcre2-8.a`, which the demo links — but only because the toolchain list says so; a program that ships its own shims can get further than the samples page does |
+| **A program that ships its own shims** | the demo links a fixed list of libraries (`libc`, `libc++abi`, `libunwind`, PCRE2, the WASI emulation archives); anything else has to be linked in by hand |
 | **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |
 | **Crystal newer than 1.17** | the wasm target does not compile on 1.21.0, the then-current release. §3 |
 | **Anything needing the browser to raise its stack** | V8 gives a wasm instance ~1 MB of native stack and a page cannot raise it, so the compiler is built `--release` (optimized frames fit in 700 KB); a debug build does not. [README §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works) |
@@ -107,24 +105,22 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 | what | command |
 | --- | --- |
-| the demo's compile → link → run, under Node | `npm run test:demo` |
-| every precompiled sample (Node's WASI) | `npm test` |
+| the page's compile → link → run, under Node | `npm test` |
 | syntax-check the server and client modules | `npm run check` |
-| rebuild the demo's payload | `npm run demo:assets` |
-| serve the pages | `npm start` → http://localhost:8127/ |
+| rebuild the payload | `npm run demo:assets` |
+| serve the page | `npm start` → http://localhost:8127/ |
 
-`npm run test:demo` is the one that matters for the demo: the page's core has no browser-only API,
-so the whole chain is checked in Node against the same assets the page fetches. What the browser
-adds is asset loading and the UI.
+`npm test` is the one that matters: the page's core has no browser-only API, so the whole chain —
+including a program that raises and rescues — is checked in Node against the same assets the page
+fetches. What the browser adds is asset loading and the UI.
 
 ## Layout
 
 ```
-public/            the pages and their hosts
+public/            the page, its worker, the compile → link → run core, and the vendored WASI host
 build/llvm-wasm/   libLLVM for wasm32-wasip1 (committed output, ~140 MB, on purpose)
-build/crystal-wasm/ the compiler pipeline, the demo payload, and the lld/exception notes
-build/             the original Docker-based sample pipeline
-samples/           the precompiled samples' Crystal source
+build/crystal-wasm/ the compiler pipeline, the payload script, and the lld/exception notes
+test/demo.mjs      the Node harness for the same code the page runs
 ```
 
 ## Licensing and provenance
@@ -141,11 +137,8 @@ MIT for the code here, and for the Crystal standard library that ends up inside 
 - **`@bjorn3/browser_wasi_shim`** v0.4.2 — MIT OR Apache-2.0 — vendored into `public/vendor/`, with
   its licence files, as the compiler's WASI host.
 
-`public/wasi-preview1.js` is written here rather than vendored, so the samples page has no
-third-party host code in it at all.
-
 ## Status
 
 The question this repository opened with — *can Crystal's compiler run in a browser* — is answered:
-it does. What is left is on the demo's side, not the compiler's: a payload small enough to ship, and
-sizing the standard library to what a page actually needs. [HANDOFF.md](HANDOFF.md) §7 has the list.
+it does, and the page is the proof. What is left is packaging it so LiveCodes can use it, which is
+[HANDOFF.md](HANDOFF.md) §7.

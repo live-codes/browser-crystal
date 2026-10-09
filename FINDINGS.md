@@ -1,13 +1,13 @@
 # Spike findings — Crystal in the browser
 
-**Status: the runtime half works; the compiler half is blocked, and the block is not ours to
-remove.**
+**Status: answered — and the answer changed. This is the chronicle, in the order it happened.**
 
-Real Crystal programs run in the tab, with no server and no cross-origin isolation, and that is
-verified end to end in headless Chrome (§1). But they have to be compiled *before* the page is
-served, because **there is no way to run Crystal's compiler in a browser** (§2) — and a playground
-whose editor cannot compile is not a language playground. Everything below was run, not inferred,
-except where it says otherwise.
+§1–§8 are the original spike, and everything in them was run, not inferred: real Crystal programs
+run in the tab with no server and no cross-origin isolation (§1), but **Crystal's compiler could
+not run in a browser** — that is what §2 concludes, and it is the finding this repository was built
+to overturn. §9 records the first half of the overturning (libLLVM was built for `wasm32-wasip1`);
+§10 the second (the compiler itself, in the page, compiling what you type). Read §2 as the problem
+statement, not as the current state.
 
 ## 1. The pipeline, and the two steps Crystal does not do for you
 
@@ -37,17 +37,18 @@ Three things about this target are worth knowing before reading the rest:
   never reclaimed. For a short-lived playground program that is a fine trade; for a long-running one
   it is not.)
 - **`Regex` needs PCRE2 built for wasm.** Crystal asks the linker for `-lpcre2-8`, and nothing
-  provides a wasm build of it, so `build/Dockerfile` compiles PCRE2 10.42 from source against the
-  same sysroot. Without it the link fails on `undefined symbol: pcre2_compile_8`. Only the 8-bit
-  library is built: pcre2's default `make` target also builds `pcre2test`, which uses `getrlimit`
-  and cannot compile for WASI.
+  provides a wasm build of it, so the spike's Dockerfile compiled PCRE2 10.42 from source against the
+  same sysroot (`build/crystal-wasm/build-pcre2.sh` does it now). Without it the link fails on
+  `undefined symbol: pcre2_compile_8`. Only the 8-bit library is built: pcre2's default `make`
+  target also builds `pcre2test`, which uses `getrlimit` and cannot compile for WASI.
 - **The module is a plain WASI command.** It defines and exports its own memory, exports `_start`,
   and imports exactly eight functions — the entire host contract (§5).
 
 ### Verified working
 
-Each row ran in headless Chrome through `public/index.html`, with `crossOriginIsolated === false`,
-and the output pane read back. Timings are from the page's own status line.
+Each row ran in headless Chrome, with `crossOriginIsolated === false`, and the output pane read
+back. In the spike these were modules compiled ahead of time; the same six samples now ship inside
+the demo, compiled by the compiler on the page, and all eight of its samples pass there (§10).
 
 | sample | what it covers | output | run |
 | --- | --- | --- | --- |
@@ -58,8 +59,10 @@ and the output pane read back. Timings are from the page's own status line.
 | `05-stdin` | `gets` over WASI `fd_read`, fed by the page's stdin box | correct | 46 ms |
 | `06-regex` | `scan`, `gsub`, `\b\w{5}\b` — i.e. PCRE2 actually working | correct | 104 ms |
 
-All six exit 0. `npm test` runs the same modules against Node's WASI implementation instead, which is
-a *different* host from `public/wasi-preview1.js` — so it checks the artifacts, not the page.
+All six exit 0. In the spike `npm test` ran the same modules against Node's WASI implementation
+instead — a different host from the page's hand-written one — so it checked the artifacts rather
+than the page. That is the role `test/demo.mjs` plays now, except that it drives the page's own code
+against the same assets the page fetches.
 
 ## 2. The blocker: Crystal's compiler cannot run in a browser
 
@@ -119,10 +122,10 @@ The compiler's **own standard library** does not compile for wasm32, so `crystal
 reporting upstream; it also means any real integration has to pin a Crystal version, which is
 uncomfortable for something the ecosystem is still calling experimental.
 
-`build/Dockerfile` therefore pins `crystallang/crystal:1.17.0`, and `build/build-samples.mjs` says so
-in its output.
+The spike's Dockerfile therefore pinned `crystallang/crystal:1.17.0`, and the pipeline in this repo
+pins the same version for the same reason.
 
-## 4. Exceptions trap
+## 4. Exceptions trap *(superseded — §10 has the fix)*
 
 `raise` does not unwind on this target. It prints a message and then hits `unreachable`:
 
@@ -193,13 +196,16 @@ fd_read  fd_write  proc_exit  random_get
 ```
 
 That is all of `wasi_snapshot_preview1` that a Crystal program used here — no filesystem, no clocks,
-no sockets, no `environ`. `public/wasi-preview1.js` implements them in about 120 lines, and refuses
-loudly if a future module asks for something it does not have, rather than failing with
-"function import requires a callable".
+no sockets, no `environ`. The spike's page implemented those eight in about 120 lines. The demo does
+not, and cannot: the *compiler* needs a real filesystem to read the standard library from, so it uses
+a full WASI host (`@bjorn3/browser_wasi_shim`, vendored) — and a compiled program is simply given an
+empty one.
 
-## 6. Payload
+## 6. Payload — the spike's, and why it was not the answer
 
-Built artifacts, committed, so a clone runs with no build step:
+Built artifacts, committed, so a clone ran with no build step. **This is history:** those modules
+were removed when the demo became the page, because a playground whose editor cannot compile is not
+a playground — §10 pays 22 MB instead.
 
 | sample | module |
 | --- | --- |
@@ -217,33 +223,39 @@ downloaded is the program and nothing else. Each module is served like any other
 page fetches nothing on a run that it has not already fetched, and the modules are cached by the
 browser like any other file.
 
-## 7. What this means for LiveCodes
+The demo trades that back deliberately: 22 MB gzipped, once, for a compiler that can compile whatever
+you type — which is the better trade for a playground, and the trade `browser-nim` and `browser-cobol`
+make too.
 
-- **`lang-crystal` does not meet the criteria yet.** Not because of licensing (Crystal is
-  Apache-2.0) or popularity, but because of the client-side compiler requirement, and there is no
-  workaround — the criteria exist precisely to exclude a hosted compiler.
-- **If it is ever revisited, the runtime half is already solved and is small.** Everything in
-  `public/wasi-preview1.js` and the run path in `public/crystal-worker.js` is what a language module
-  would need; the module shape would follow `lang-haskell` — an identity `factory`, a
-  `{{hash:lang-crystal-script.js}}` bundle, `scriptType: 'text/crystal'` — with `largeDownload:
-  false` and no isolation headers (unusual, in a good way).
-- **The two things to watch upstream** are the 1.21.0 regression (§3) and any movement on a wasm
-  compiler or a standalone interpreter (§2). Until one of those lands, the interesting Crystal work
-  in LiveCodes is on the ✗ side of the checklist.
-- **What is genuinely reusable regardless:** the toolchain in `build/` (it is the only place a
-  wasm32 Crystal build is fully specified — cross-compile, sysroot, `-lpcre2-8`), and the eight-function
-  host contract in §5.
+## 7. What this meant for LiveCodes *(written when the compiler half was blocked — §9–§10 changed the conclusion)*
+
+- **`lang-crystal` did not meet the criteria then.** Not because of licensing (Crystal is
+  Apache-2.0) or popularity, but because of the client-side compiler requirement, and there was no
+  workaround — the criteria exist precisely to exclude a hosted compiler. **The wasm compiler removes
+  exactly that objection**, which is why building it was worth the effort.
+- **The runtime half was already solved and small**, and it is now a package rather than a page. The
+  module shape would follow `lang-haskell` — an identity `factory`, a `{{hash:…}}` bundle,
+  `scriptType: 'text/crystal'` — but with `largeDownload: true`, since a real compiler is a real
+  download. [HANDOFF.md](HANDOFF.md) §7 has the packaging plan.
+- **The two things worth watching upstream** are the 1.21.0 regression (§3) — still real; the
+  compiler is pinned at 1.17.0 — and any movement on a wasm compiler or a standalone interpreter,
+  which did not arrive, and is why this one was built here.
+- **What is genuinely reusable:** the toolchain in `build/` (the only place a wasm32 Crystal build is
+  fully specified — cross-compile, sysroot, `-lpcre2-8`), the libLLVM-for-wasm artifact (§9), the
+  exception-handling patches (§10), and the eight-function host contract in §5 — which is what a
+  *compiled Crystal program* needs, as opposed to what the compiler needs.
 
 ## 8. Reproducing
 
 ```bash
-npm run build          # Docker: Crystal 1.17.0 + wasi-sdk 22 + PCRE2 → public/crystal/*.wasm
+npm run demo:assets    # WSL: the compiler, the linker, the stdlib and the sysroot archives
 npm start              # → http://localhost:8127/   (no isolation; it is not needed)
-npm test               # every sample, run under Node's WASI instead of the page's
-npm run check          # syntax-check the server, the build script and the client modules
+npm test               # the page's compile → link → run, under Node, with stdin
+npm run check          # syntax-check the server and the client modules
 ```
 
-Docker is the only requirement for `npm run build`. To confirm the toolchain gap for yourself:
+The spike's build ran in Docker (Crystal 1.17.0 + wasi-sdk 22 + PCRE2), and that pipeline is gone —
+the compiler in the page does the job now. The toolchain gap it worked around is still worth knowing:
 
 ```console
 $ docker run --rm crystallang/crystal:1.17.0 sh -c "which wasm-ld; ls /usr/bin/../lib/crystal"
@@ -252,7 +264,7 @@ libgc.a
 
 — no `wasm-ld`, and the one library present is the x86-64 libgc that wasm32 does not use.
 
-The browser run above was driven with the `agent-browser` CLI against headless Chrome. The page
+The browser runs above were driven with the `agent-browser` CLI against headless Chrome. The page
 exposes `document.documentElement.dataset` (`status`, `stage`, `runs`, `exitCode`, `ms`, `sample`)
 and its element ids as globals, so the checks can read state and click Run without string literals.
 
@@ -354,7 +366,7 @@ from source (`bootstrap.sh`) and then used to cross-compile.
 
 **It works, in the host and in a browser.** `begin`/`raise`/`rescue` on `wasm32-wasip1` prints
 `caught: boom` / `done`; the wasm compiler compiles a program; and — with no host tool — clang-wasm's
-`lld.wasm` links the object it emits and the result runs. [`public/demo.html`](public/demo.html) puts
+`lld.wasm` links the object it emits and the result runs. [`public/index.html`](public/index.html) puts
 the whole chain behind an editor: edit, press Run, and the compiler, the linker and the program all
 run in the tab (~2 s a compile, verified in headless Chrome — it was 10–15 s until the WASI host's
 quadratic file growth was fixed; see [build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went)).
@@ -365,9 +377,10 @@ two-stacks trap (Crystal's linear stack vs V8's native stack, and why `-z stack-
 `RangeError`) — is in
 [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**Still to do:** the payload is 22.8 MB gzipped (68 MB raw) — 11.8 MB of it the compiler, and 7.8 MB
-the linker, which is a *generic* lld. A wasm-only lld is the next real win, and it is a port, not a
-flag. The pipeline itself is proved, end to end, in the browser.
+**Still to do:** packaging, not capability. The payload is 22.8 MB gzipped (68 MB raw) — 11.8 MB of
+it the compiler, 7.8 MB the linker, which is a *generic* lld. A wasm-only lld was built and is *not*
+smaller (27.9 MB raw: lld's LTO is not separable by a flag), so what remains is a `crystal` language
+package for LiveCodes — [HANDOFF.md](HANDOFF.md) §7.
 
 **The honest headline.** The question this document opened with — can Crystal's compiler run in
 a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the

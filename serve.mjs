@@ -1,9 +1,9 @@
-// Static file server for the proof of concept.
+// Static file server for the demo page.
 //
 //   node serve.mjs        # http://localhost:8127
 //
-// It does not compile anything: the .wasm files were built by `npm run build`,
-// and running this server is not part of the pipeline — it is here because
+// It does not compile anything — the page compiles Crystal in the tab. It is
+// here because
 //
 //   * ES modules and Web Workers do not load over file://, and
 //   * .wasm has to be sent as `application/wasm`, or WebAssembly.compileStreaming
@@ -64,6 +64,6 @@ const server = createServer(async (req, res) => {
 
 const port = Number(process.env.PORT || 8127);
 server.listen(port, () => {
-	console.log(`Crystal proof of concept on http://localhost:${port}/`);
-	console.log('  the page and its Crystal modules, as built — nothing is compiled here');
+	console.log(`Crystal in the browser on http://localhost:${port}/`);
+	console.log('  the page compiles, links and runs Crystal itself; this server only ships files');
 });

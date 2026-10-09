@@ -22,13 +22,18 @@ SOFTWARE.
 
 ---
 
-The built modules in `public/crystal/` embed Crystal's runtime and standard
-library, which are Apache-2.0:
+The programs the page compiles, and the payload it ships, embed Crystal's runtime
+and standard library, which are Apache-2.0:
 
 - Crystal compiler and standard library: Apache-2.0
-- wasi-libc (linked into every module): MIT OR Apache-2.0 WITH LLVM-exception
-- PCRE2 (linked into `06-regex.wasm`): BSD-3-Clause
+- wasi-libc (linked into every program): MIT OR Apache-2.0 WITH LLVM-exception
+- PCRE2 (linked in when a program uses `Regex`): BSD-3-Clause
+- LLVM (linked into the compiler, and into the linker the page runs): Apache-2.0
+  WITH LLVM-exception
 
-The toolchain that produces them lives in `build/Dockerfile` and is not
-redistributed here: Crystal 1.17.0 from the official image, wasi-sdk 22 for
-`wasm-ld` and the WASI sysroot, and PCRE2 10.42 built from source.
+The toolchain that produces them lives in `build/` — patched sources and scripts,
+not redistributed here: Crystal 1.17.0 from the official distribution, wasi-sdk 33
+for `wasm-ld` and the WASI sysroot, PCRE2 built from source for wasm, and the
+libLLVM-for-wasm built in `build/llvm-wasm/`. The one third-party component
+vendored into the page is `@bjorn3/browser_wasi_shim`, under `public/vendor/` with
+its own licence files.

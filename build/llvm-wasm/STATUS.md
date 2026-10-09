@@ -61,15 +61,19 @@ Deliberately **not** used: `__wasilibc_unmodified_upstream`. It looks like it un
 all of this from musl, but it makes `<errno.h>` want `<bits/errno.h>`, which
 wasi-libc does not ship — it expects a complete musl sysroot.
 
-## What remains
+## What it was for, and where that stands
 
-The Crystal compiler, cross-built against these libraries — the consumer this
-artifact was produced for. Nothing above needs to change for it; it links
+The Crystal compiler, cross-built against these libraries — the consumer this artifact was produced
+for — **now works, and runs in a browser**: see [../crystal-wasm/](../crystal-wasm/). It links
 `out/lib/*.a` plus `wasi-compat/compat.c` and the emulated libraries, exactly as
-`verify/run-probe.sh` does, and it supplies its own `llvm-config`-style flags
-(`llvm-config` prints the host's; a wasm build needs the list above).
+`verify/run-probe.sh` does, and it supplies its own `llvm-config`-style flags (`llvm-config` prints
+the host's; a wasm build needs the list above).
 
-Two things worth knowing for that step: the compiler will emit for
-`wasm32-wasip1` via the WebAssembly backend that is present here, and the parts of
-LLVM that need processes, signals or sockets are stubs — which is fine, because a
-compiler does not fork or install signal handlers.
+Two things worth knowing for any other consumer: a compiler built against these libraries emits for
+`wasm32-wasip1` via the WebAssembly backend that is present here, and the parts of LLVM that need
+processes, signals or sockets are stubs — which is fine, because a compiler does not fork or install
+signal handlers.
+
+**Being extracted.** This directory is to become its own repository and npm package
+(`@live-codes/llvm-wasm`, with the archives in the tarball) so that other LLVM-based ports can reuse
+it as a build-time dependency — [../../HANDOFF.md](../../HANDOFF.md) §7.

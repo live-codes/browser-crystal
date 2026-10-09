@@ -7,10 +7,11 @@ Everything a new session needs to pick this up cold. Read this first, then
 **The goal.** Add Crystal to LiveCodes: edit Crystal in a page, compile it in the tab, run it —
 no server. Crystal has no client-side compiler, so this repo set out to make one.
 
-**One-line status.** libLLVM for wasm is built and verified; the Crystal compiler builds, links
-and *runs* as wasm; **exception handling now works**, and the compiler compiles a program to a
-wasm object that links and runs. The remaining work is the browser side: `lld` in the page and
-shipping the stdlib/sysroot as assets (§7). See §6 for the (now closed) exception story.
+**One-line status.** Done, end to end. libLLVM for wasm is built and verified; the Crystal compiler
+builds, links and *runs* as wasm; **exception handling works**; and **the page compiles, links and
+runs Crystal in the tab** — about 2 s a compile, on a 22 MB gzipped payload, with a stdin box and
+eight samples that are compiled by the compiler on the page. What is left is packaging, not
+capability: a `crystal` language package for LiveCodes (§7). See §6 for the (closed) exception story.
 
 ---
 
@@ -34,8 +35,7 @@ mid-transfer). `git ls-remote`/`git clone` are fine; for release assets use
 `build/llvm-wasm/fetch.sh` (parallel ranged download with per-chunk resume). One 194 MB tarball
 took ~20 minutes with it.
 
-Do not rely on Docker — the daemon is not running. Do not modify
-`D:\DevWork\live-codes\clang-wasm`; reading/using its assets is fine.
+Do not modify `D:\DevWork\live-codes\clang-wasm`; reading/using its assets is fine.
 
 ---
 
@@ -47,7 +47,8 @@ Do not rely on Docker — the daemon is not running. Do not modify
 | **Crystal compiler as wasm** | **Done.** `crystal.wasm` (96 MB) builds, links and runs. `--version` prints `Crystal 1.17.0 / LLVM: 20.1.8 / Default target: wasm32-unknown-wasip1`. |
 | **Compiling a program** | Reads the stdlib, parses, does semantic analysis and macro interpretation, **and emits a wasm object** — `try-compile.mjs` produces `out.o.wasm` for a real program. |
 | **Exceptions on wasm** | **Done.** `raise`/`rescue`/`ensure` work on `wasm32-wasip1`. See §6. |
-| **The page** | Untouched. Still the original PoC: a read-only pane running precompiled samples. Needs the work in §7. |
+| **The page** | **Done.** `public/index.html`: edit, press Run, and the compiler, the linker and your program all run in the tab. Eight samples, a stdin box, ~2 s a compile, 22 MB gzipped. `test/demo.mjs` drives the same code under Node. |
+| **The package** | **Not started.** `@live-codes/crystal-wasm`, in the shape of `@live-codes/nim-wasm`, so LiveCodes can consume it — §7. |
 
 ---
 
@@ -92,10 +93,20 @@ build/crystal-wasm/       the Crystal compiler pipeline
   apply-patches.py          every Crystal source edit, idempotent and commented
   link.sh                   links the wasm object against libLLVM + PCRE2 + compat
   build-pcre2.sh            cross-builds PCRE2 for wasm
-  try-compile.mjs           runs crystal.wasm under clang-wasm's toolchain (real FS)
+  demo-assets.sh            builds the page's payload into public/crystal-demo/ (gitignored)
+  repro.sh                  the fast loop: one exception program, seconds per iteration
+  try-compile.mjs           the compiler alone, under clang-wasm's toolchain (real FS)
+  try-link.mjs              links what the compiler emitted, with lld.wasm, then runs it
   README.md                 the detailed blocker log — read this alongside §6
 
-public/                   the PoC page (unchanged: read-only pane + precompiled samples)
+public/
+  index.html                THE page: editor, Run/Stop, output, stdin box, phase timings
+  demo-worker.js            fetches and compiles the assets once, then drives a run
+  crystal-demo.js           compile → link → run, ~200 lines, no browser-only API
+  vendor/browser_wasi_shim/ the WASI host and its filesystem (third-party, vendored)
+  crystal-demo/             the payload, gzipped, gitignored — `npm run demo:assets`
+
+test/demo.mjs             the Node harness: the same compile → link → run, plus stdin
 FINDINGS.md               §9 = libLLVM, §10 = the compiler
 ```
 
@@ -160,6 +171,22 @@ cd /root/bc-crystal && export CRYSTAL_PATH=/root/bc-crystal/src
 `llvm-objdump` from wasi-sdk disassembles wasm and is the tool that cracked the last step:
 `/opt/wasi-sdk-33/bin/llvm-objdump -d exc.wasm` (look for `try`/`catch`/`rethrow` — their absence
 was the whole bug).
+
+**The page.** No WSL needed after the payload exists; the payload itself is built by
+`demo-assets.sh` (wrap → strip-debug → `wasm-opt -Oz --enable-exception-handling` → gzip):
+
+```bash
+npm run demo:assets   # once, in WSL — collects everything into public/crystal-demo/ (gitignored)
+npm start             # → http://localhost:8127/
+npm test              # the same compile → link → run under Node, with stdin
+npm run check         # syntax-check the server and client modules
+```
+
+To drive the page the way this repo's checks do (`agent-browser`): open it, then set `#sample`,
+click `#run` and read `document.documentElement.dataset` — `runs` counts finished runs, `status`
+is `idle`/`running`/`ok`/`error`, `exitCode` is the program's. All eight samples pass that way in
+headless Chrome. A sample's source lives in a JS template literal, so any backslash in it must be
+doubled and any backtick escaped — the regex sample is the one that bites.
 
 **Gotcha: don't redirect the WSL command's output from Windows.** `wsl … -- bash x.sh > log`
 puts the log on the *Windows* side; write scripts to files, redirect inside WSL, and read the
@@ -238,49 +265,62 @@ offending functions; a plain `WebAssembly.compile` (what the demo does) surfaces
 
 ---
 
-## 7. After exceptions — the remaining roadmap
+## 7. What is left — packaging
 
-The exception blocker is closed (§6). What is left is the browser:
+Everything the page needed is done (§2): the lld step, the assets, the page, and the `--release`
+build the stack demands. What remains is what LiveCodes consumes. The plan lives at
+`~/.commandcode/plans/browser-crystal-next-steps.md`; this is it in outline.
 
-1. ~~**The lld step.**~~ **Done — `try-link.mjs`.** clang-wasm's `lld.wasm` links the object the
-   compiler emits, run as a WASI command in the same host (no host tool), and the result runs.
-   Two facts worth keeping: `lld.wasm` is a *generic* lld driver and must be invoked as
-   **`wasm-ld`** (argv[0] dispatch), and its **LLVM 22 links our LLVM 20 object** fine. The link
-   needs the **`eh/` sysroot libs** — `libc++abi.a` and `libunwind.a` (the wasm EH personality and
-   `_Unwind_*`); clang-wasm's own bundled sysroot deliberately excludes `eh/`, so those ship with
-   the page (§7.2).
-2. **Assets.** `build/crystal-wasm/demo-assets.sh` collects everything the demo needs into
-   `public/crystal-demo/` (gitignored): the compiler, lld, a `stdlib.json` (the patched stdlib) and
-   the `lib/…` archives from wasi-sdk-33 plus PCRE2 and clang_rt. **All gzipped — 22.8 MB total,
-   down from 68 MB raw (and 110 MB before the trimming started).** Four things got it there:
-   **`wasm-opt -Oz --enable-exception-handling`** on the linked module (59 → 35.5 MB raw; do *not*
-   use `-all`, one of those passes emits a module V8 rejects — `unknown import kind 0x7e`), **gzip**
-   (~4×, the page inflates with `DecompressionStream`), **`-Wl,--strip-debug`** in `link.sh` (79 → 59
-   MB, keeping the `name` section because named wasm stack traces are how this project debugs
-   itself), and **dropping code nothing needs** — `compiler/` from the shipped stdlib and `libc++.a`
-   (a Crystal program is not C++; it needs libc++abi and libunwind for the EH runtime, which stay).
-   What is left is mostly `lld.wasm`: 7.8 MB, because it is a *generic* lld and `wasm-opt` barely
-   touches it (20.80 → 20.38 MB). **A wasm-only lld was attempted and is not worth adopting**: it
-   builds and validates (lld compiles for `wasm32-wasip1` almost unmodified once trimmed to the
-   `wasm` driver), but comes out 27.9 MB raw / 9.8 MB gzipped — *larger* than the generic artifact,
-   because lld's LTO is not separable by a flag (it is in `InputFiles.cpp`'s bitcode parsing,
-   `Driver.cpp`'s target init, and `lld/Common`'s codegen flags) and dragging it in is a fork of
-   lld. The detail and the numbers are in
-   [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted).
-3. ~~**The page.**~~ **Done — `public/demo.html`.** An editable editor that compiles, links and
-   runs in the tab: `public/demo-worker.js` (fetches and caches the compiled modules) →
-   `public/crystal-demo.js` (compile → link → run, ~200 lines, no browser-only API, so
-   `test/demo.mjs` drives the same code in Node) → the vendored `@bjorn3/browser_wasi_shim` as the
-   WASI host and filesystem. Verified in headless Chrome (`agent-browser`), `crossOriginIsolated
-   === false`: `hello …` and the exceptions sample both correct, ~12 s per compile. `try-compile.mjs`
-   and `try-link.mjs` remain the smaller, independently-runnable proofs of each half.
-4. **`--release` is required, not optional.** `RELEASE=1 cross-compile.sh` adds `--release`
-   (-O3 --single-module). It is 79 MB instead of 98 MB, but the real reason is the stack: the
-   **debug** compiler needs more native stack than a browser gives (measured: `--stack-size=1000`
-   fails, `1234` passes; a browser's V8 is ~1 MB and cannot be raised), while the **release**
-   build passes 5/5 even at **700 KB**. With the release compiler the whole flow —
-   `try-compile.mjs` → `try-link.mjs` — runs at Node's *default* stack, which is the shape a
-   browser has. If it ever regresses, the transformer's recursion depth is the thing to look at.
+1. **`@live-codes/crystal-wasm`** — a package under `packages/crystal-wasm/`, in the shape of
+   `@live-codes/nim-wasm`: `createCompiler({ baseUrl, toolchain?, compileArgs?, args? })` →
+   `compiler.run(code, input, { args?, files? })` → `{ stdout, stderr, output, errors, exitCode,
+   compileMs, runMs }`, plus a `crystal-wasm-copy-assets` bin and assets verified against SHA-256
+   receipts. Self-contained by default; an injected `toolchain` (clang-wasm's `createToolchain()`)
+   lets a page share one Clang runtime instead of paying for a second lld — nim-wasm's `toolchain`
+   option does the same. **`files` and `args` belong in the first cut**: cheap now, breaking later.
+   The page becomes the package's first consumer, which is what proves the API.
+2. **`@live-codes/llvm-wasm`** — the separation. `build/llvm-wasm/` becomes its own repo and npm
+   package — pipeline, patches, `wasi-compat`, the lock file, and `out/` (the 99 archives) in the
+   tarball — so any LLVM-based port can reuse it as a build-time dependency; this repo then consumes
+   it rather than carrying a 140 MB copy. ~140 MB is fine for a handful of ports and painful for CI,
+   so that README should record the release-asset escape hatch.
+3. **Deliberately not now:** upstreaming the `browser_wasi_shim` file-growth fix (our patch exists
+   only because upstream grows files quadratically — it needs network access); the wasm-only lld
+   (see below — built, and *larger*); and further compiler trimming (11.8 MB gzipped is the floor for
+   the whole compiler plus the whole standard library as wasm).
+
+Two small items fold into the next rebuild: the `_Unwind_SetIP` binding mismatch (§8) and
+re-pinning the assets.
+
+**Facts from the finished work, worth keeping** — they are in the log, not visible in the code:
+
+- **`--release` is required, not an optimization.** `RELEASE=1 cross-compile.sh` adds `--release`
+  (-O3 --single-module). It is 79 MB instead of 98 MB, but the real reason is the stack: the
+  **debug** compiler needs more native stack than a browser gives (measured: `--stack-size=1000`
+  fails, `1234` passes; a browser's V8 is ~1 MB and cannot be raised), while the **release** build
+  passes 5/5 even at **700 KB**. With it, the whole flow runs at Node's *default* stack, which is
+  the shape a browser has. If it ever regresses, the transformer's recursion depth is the thing to
+  look at.
+- **The payload is 22.8 MB gzipped**, from 68 MB raw (and 110 MB before the trimming started).
+  `demo-assets.sh` does all of it: **`wasm-opt -Oz --enable-exception-handling`** on the linked
+  module (59 → 35.5 MB raw; do *not* use `-all` — one of those passes emits a module V8 rejects,
+  `unknown import kind 0x7e`), **gzip** (~4×, inflated by the page with `DecompressionStream`),
+  **`-Wl,--strip-debug`** in `link.sh` (79 → 59 MB, keeping the `name` section because named wasm
+  stack traces are how this project debugs itself), and **dropping code nothing needs** —
+  `compiler/` from the shipped stdlib, and `libc++.a` (a Crystal program is not C++; it needs
+  libc++abi and libunwind for the EH runtime, which stay).
+- **Most of what is left is `lld.wasm`** (7.8 MB): a *generic* lld that `wasm-opt` barely touches
+  (20.80 → 20.38 MB). **A wasm-only lld was built and is not worth adopting** — it builds and
+  validates (lld compiles for `wasm32-wasip1` almost unmodified once trimmed to the `wasm` driver)
+  but comes out 27.9 MB raw / 9.8 MB gzipped, *larger* than the generic artifact, because lld's LTO
+  is not separable by a flag (it is in `InputFiles.cpp`'s bitcode parsing, `Driver.cpp`'s target
+  init, and `lld/Common`'s codegen flags) and dragging it in is a fork of lld. Numbers:
+  [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted).
+- **The link is done by `lld.wasm`, invoked as `wasm-ld`** (argv[0] dispatch — it is a generic
+  driver), and its LLVM 22 links our LLVM 20 objects fine. It needs the `eh/` sysroot libraries
+  (`libc++abi.a`, `libunwind.a` — the wasm personality and `_Unwind_*`), which clang-wasm's own
+  bundled sysroot deliberately excludes, so they ship with the page. `try-compile.mjs` and
+  `try-link.mjs` remain the smaller, independently-runnable proofs of each half.
 
 ---
 
@@ -289,9 +329,10 @@ The exception blocker is closed (§6). What is left is the browser:
 **WASI gaps** (all live in `build/llvm-wasm/wasi-compat/`; reuse them, don't rediscover them):
 
 - `libdl.a` is an **empty stub** — `dlopen`/`dlclose`/`dlsym`/`dlerror` are stubbed in `compat.c`.
-- The sysroot's `_Unwind_SetIP` returns `void` while Crystal's `LibUnwind` binding says
-  `SizeT`; wasm-ld warns. Harmless while Crystal's personality is never called, but the
-  bindings do not match the library.
+- The sysroot's `_Unwind_SetIP` returns `void` while Crystal's `LibUnwind` binding says `SizeT`;
+  wasm-ld warns. Harmless — Crystal's personality is never called — and the page hides build
+  chatter, but the binding is simply wrong: `set_ip` should be `Void`. **Scheduled** to be patched
+  into `src/lib_unwind.cr` at the next compiler rebuild (§7), which removes the warning at source.
 - `Crystal::EventLoop::Wasi#open` was a `NotImplementedError`; implemented over `LibC.open`.
 - `exception/call_stack.cr` picks `call_stack/null` on wasm, which does **not** require
   `exception/lib_unwind` and does **not** define `CallStack.print_backtrace`; both were patched.
@@ -339,6 +380,16 @@ bootstrap compiler — put compiler-side helpers in `compiler/…` files instead
 ## 9. Commit log (`main`)
 
 ```
+43919bd  Give the demo a stdin box
+68428e0  Keep build chatter out of the output pane
+ca3b5c0  Make a demo compile ~5x faster: the WASI host's file writes were quadratic
+1ef5945  Record the wasm-only lld attempt: it builds, and it is not smaller
+bbaced6  Shrink the compiler: 68 MB raw -> 35.5, payload 110 MB -> 23 MB gzipped
+2f14efd  Make the demo shippable: 110 MB -> 27 MB, and one EH proposal
+4e7e7dc  The compiler runs in the page: an editable demo
+5227c13  Link in the WASI host, and make --release the page build
+22a55d5  Wasm EH: the catch works — it needed -wasm-enable-eh, not just codegen
+708b544  Add a handoff document for the next session
 5b5ecbb  Wasm EH: it is the funclet form, and the repro proves it
 0a384fc  Wasm landing pads verify; the catch still does not take effect
 d2ed612  Fix the type-id load, which the verifier named exactly
@@ -358,11 +409,16 @@ f1494f5  Start crossing the Crystal compiler to wasm
 e0b1867  libLLVM builds for wasm32-wasip1 and runs in a wasm engine
 5b851fa  Get LLVMSupport building for wasm32-wasip1
 ed71913  Add a pipeline to build libLLVM for wasm32-wasip1
+e6f8dd1  initial commit
 ```
 
 ## 10. Cautions
 
 - `build/llvm-wasm/out/` is ~140 MB and **committed on purpose** by the user. Don't "clean" it.
+- `public/crystal-demo/` (the page's payload, ~22 MB gzipped) is **not** committed — regenerate it
+  with `npm run demo:assets`. `public/vendor/` is small and *is* committed.
+- There is one page (`public/index.html`) and no Docker pipeline; the samples are compiled by the
+  page's own compiler, and there is no second WASI host.
 - `.commandcode/taste/taste.md` is modified by the learning system — leave it alone.
 - `D:\DevWork\live-codes\clang-wasm` is read-only for this work.
 - The working tree is clean; `build/crystal-wasm/README.md` is the detailed log and is kept

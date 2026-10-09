@@ -2,8 +2,8 @@
 //
 //   node run-wasi.mjs <module.wasm> [args...]
 //
-// Mirrors what test/run-samples.mjs does for the sample modules, kept separate
-// because this one is only about smoke-testing the wasm libLLVM build.
+// Mirrors what test/demo.mjs does for the demo's modules, kept separate because
+// this one is only about smoke-testing the wasm libLLVM build.
 import { readFile } from 'node:fs/promises';
 import { WASI } from 'node:wasi';
 
