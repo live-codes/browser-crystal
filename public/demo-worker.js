@@ -70,15 +70,41 @@ self.addEventListener('message', async ({ data }) => {
 	const phase = (text) => self.postMessage({ type: 'phase', phase: text });
 	const started = performance.now();
 
+	// The compiler and the linker both say things that are not about the program:
+	// Crystal echoes the link command it *would* have run (`wasm-ld out.o.wasm -o
+	// out.o -lc`, which is not the link we do), and lld warns about a signature
+	// mismatch between Crystal's `_Unwind_SetIP` binding and libunwind's wasm
+	// port (known, benign, and documented). Neither belongs in the output pane.
+	//
+	// What does belong is a compiler warning *about this program*, which arrives
+	// on the compiler's stderr. So build output is buffered rather than streamed,
+	// and on success only that is kept; a failed build sends its diagnostics the
+	// usual way, through the error.
+	const buildOutput = [];
+	const onStdout = (text, stage) => {
+		if (stage === 'running') self.postMessage({ type: 'stdout', text, stage });
+		else buildOutput.push({ kind: 'stdout', text, stage });
+	};
+	const onStderr = (text, stage) => {
+		if (stage === 'running') self.postMessage({ type: 'stderr', text, stage });
+		else buildOutput.push({ kind: 'stderr', text, stage });
+	};
+
 	try {
 		const loaded = await loadAssets(phase);
 		const result = await compileAndRun({
 			source: data.source,
 			assets: loaded,
 			onStage: (stage) => phase(stage),
-			onStdout: (text, stage) => self.postMessage({ type: 'stdout', text, stage }),
-			onStderr: (text, stage) => self.postMessage({ type: 'stderr', text, stage })
+			onStdout,
+			onStderr
 		});
+
+		for (const chunk of buildOutput) {
+			if (chunk.stage === 'compiling' && chunk.kind === 'stderr') {
+				self.postMessage({ type: 'stderr', text: chunk.text, stage: chunk.stage });
+			}
+		}
 
 		self.postMessage({
 			type: 'exit',

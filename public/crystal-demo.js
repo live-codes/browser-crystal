@@ -26,6 +26,12 @@ import {
 
 const ENCODER = new TextEncoder();
 
+// Crystal colourises its diagnostics, and those escape sequences would arrive in
+// the page as literal "[4m" text. Build output is plain; a *program's* output is
+// left alone, because a program may colourise on purpose.
+const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+const plain = (text) => text.replace(ANSI, '');
+
 // browser_wasi_shim grows a file by allocating exactly what the write needs and
 // copying the old bytes in, on *every* write that lands past the end:
 //
@@ -218,9 +224,10 @@ function textSink(onText) {
 async function runCommand(moduleOrBytes, { args, env = [], entries = [], onStdout, onStderr, root: given, stage }) {
 	const root = given ?? buildTree(entries);
 	// The stage is handed back with each chunk so the caller can show the
-	// compiler's and linker's chatter differently from the program's output.
-	const stdout = textSink((text) => onStdout?.(text, stage));
-	const stderr = textSink((text) => onStderr?.(text, stage));
+	// compiler's and linker's chatter differently from the program's output --
+	// and so that only the program's output keeps its colour.
+	const stdout = textSink((text) => onStdout?.(stage === 'running' ? text : plain(text), stage));
+	const stderr = textSink((text) => onStderr?.(stage === 'running' ? text : plain(text), stage));
 
 	// stdin is an empty file: the compiler and the linker never read it, and a
 	// program that calls gets reads EOF, which is the honest answer here.
@@ -294,9 +301,11 @@ export async function compileAndRun({ source, assets, onStage, onStdout, onStder
 
 	const object = compiled.root.contents.get('out.o.wasm')?.data;
 	if (!object) {
-		const error = new Error('the compiler did not produce out.o.wasm');
+		// The compiler's own diagnostics are the useful message; this is the
+		// heading over them.
+		const error = new Error('compilation failed');
 		error.stage = 'compiling';
-		error.diagnostics = compiled.stderr || compiled.stdout;
+		error.diagnostics = plain(compiled.stderr || compiled.stdout);
 		throw error;
 	}
 
@@ -317,9 +326,9 @@ export async function compileAndRun({ source, assets, onStage, onStdout, onStder
 
 	const wasm = linked.root.contents.get('out.wasm')?.data;
 	if (!wasm) {
-		const error = new Error('the linker did not produce out.wasm');
+		const error = new Error('linking failed');
 		error.stage = 'linking';
-		error.diagnostics = linked.stderr || linked.stdout;
+		error.diagnostics = plain(linked.stderr || linked.stdout);
 		throw error;
 	}
 

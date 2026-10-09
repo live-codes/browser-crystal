@@ -70,6 +70,11 @@ Chrome: **4.3 s for the first run, 2.0 s after**. (It was 16 s and 10–15 s unt
 file writes were fixed: writing an object file was quadratic. See
 [build/crystal-wasm/README.md](build/crystal-wasm/README.md#where-the-compile-time-went).)
 
+The output pane is the *program's* output. The compiler's and the linker's own chatter is buffered
+and not shown — Crystal echoes the link command it would have run, and lld warns about a known,
+benign `_Unwind_SetIP` signature mismatch in libunwind's wasm port. A warning *about your code* and
+a failed build's diagnostics still appear.
+
 `public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
 smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
 still there because it is the cheap path — no assets to build, and it runs Crystal on a plain
