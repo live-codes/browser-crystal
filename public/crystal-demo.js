@@ -221,7 +221,7 @@ function textSink(onText) {
 	};
 }
 
-async function runCommand(moduleOrBytes, { args, env = [], entries = [], onStdout, onStderr, root: given, stage }) {
+async function runCommand(moduleOrBytes, { args, env = [], entries = [], stdin = '', onStdout, onStderr, root: given, stage }) {
 	const root = given ?? buildTree(entries);
 	// The stage is handed back with each chunk so the caller can show the
 	// compiler's and linker's chatter differently from the program's output --
@@ -229,10 +229,11 @@ async function runCommand(moduleOrBytes, { args, env = [], entries = [], onStdou
 	const stdout = textSink((text) => onStdout?.(stage === 'running' ? text : plain(text), stage));
 	const stderr = textSink((text) => onStderr?.(stage === 'running' ? text : plain(text), stage));
 
-	// stdin is an empty file: the compiler and the linker never read it, and a
-	// program that calls gets reads EOF, which is the honest answer here.
+	// fd 0 is a file holding the caller's stdin: a program that calls `gets`
+	// reads it, and one that does not never looks. The compiler and the linker
+	// are given the empty string -- neither reads stdin at all.
 	const fds = [
-		new OpenFile(new File(new Uint8Array())),
+		new OpenFile(new File(ENCODER.encode(stdin))),
 		stdout.fd,
 		stderr.fd,
 		new PreopenDirectory('/', root.contents)
@@ -268,13 +269,14 @@ async function runCommand(moduleOrBytes, { args, env = [], entries = [], onStdou
  * @param {object} options.assets  `{ compiler, lld, stdlib, libs }` — the compiler
  *   and lld as bytes or compiled `WebAssembly.Module`, `stdlib` as `{ path: text }`
  *   and `libs` as `{ path: Uint8Array }` (paths already include `lib/…`).
+ * @param {string} [options.stdin]  what the program reads from fd 0
  * @param {(stage: string) => void} [options.onStage] `compiling` | `linking` | `running`
  * @param {(text: string) => void} [options.onStdout]
  * @param {(text: string) => void} [options.onStderr]
- * @returns {Promise<{ wasm: Uint8Array, stdout: string, stderr: string, phases: object }>}
+ * @returns {Promise<{ wasm: Uint8Array, stdout: string, stderr: string, exitCode: number, phases: object }>}
  *   Throws with `{ stage }` set if a stage fails.
  */
-export async function compileAndRun({ source, assets, onStage, onStdout, onStderr }) {
+export async function compileAndRun({ source, assets, stdin = '', onStage, onStdout, onStderr }) {
 	const { compiler, lld, stdlib, libs } = assets;
 	const phases = {};
 
@@ -337,6 +339,7 @@ export async function compileAndRun({ source, assets, onStage, onStdout, onStder
 	const program = await runCommand(await WebAssembly.compile(wasm), {
 		args: ['program'],
 		entries: [],
+		stdin,
 		onStdout,
 		onStderr,
 		stage: 'running'

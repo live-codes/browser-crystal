@@ -466,11 +466,19 @@ came from wasi-sdk-33 directly.
 `public/demo.html` is this pipeline as a page you can type into:
 
 ```
-public/demo.html        the editor, Run/Stop, output, phase timings
+public/demo.html        the editor, Run/Stop, output, phase timings, and a stdin box
 public/demo-worker.js   fetches and compiles the assets once, then drives a run
 public/crystal-demo.js  compile → link → run; no browser-only API
 public/vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs
 ```
+
+`crystal-demo.js` is deliberately the same logic as `try-compile.mjs` +
+`try-link.mjs`, expressed once with no Node API — so `test/demo.mjs` runs the
+exact code the page runs, against the exact assets it fetches, and the worker adds
+only fetching, caching the compiled modules, and the protocol. The program's fd 0
+is a file holding the page's stdin box, so a program that calls `gets` reads what
+is typed there; the compiler and the linker are given the empty string, since
+neither reads stdin at all.
 
 `demo-assets.sh` collects what it fetches into `public/crystal-demo/` (gitignored),
 **gzipped**, because the page inflates it itself with `DecompressionStream` — no

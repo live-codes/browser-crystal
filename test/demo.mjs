@@ -28,11 +28,15 @@ async function walk(prefix) {
 	return out;
 }
 
+// Reads a line from stdin as well, so the harness covers the fd 0 path the
+// stdin box drives.
 const PROGRAM = `begin
   raise "boom"
 rescue ex : Exception
   puts "caught: #{ex.message}"
 end
+name = gets
+puts "hello #{name}"
 puts "done"
 `;
 
@@ -56,6 +60,7 @@ const assets = {
 let last = '';
 const result = await compileAndRun({
 	source: PROGRAM,
+	stdin: 'world\n',
 	assets,
 	onStage: (stage) => {
 		if (stage !== last) {
@@ -72,7 +77,7 @@ console.log(
 	'phases:',
 	Object.fromEntries(Object.entries(result.phases).map(([k, v]) => [k, `${v.toFixed(0)} ms`]))
 );
-const expected = 'caught: boom\ndone\n';
+const expected = 'caught: boom\nhello world\ndone\n';
 if (result.stdout === expected && result.exitCode === 0) {
 	console.log('OK');
 } else {

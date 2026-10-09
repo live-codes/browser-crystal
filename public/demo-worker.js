@@ -94,6 +94,7 @@ self.addEventListener('message', async ({ data }) => {
 		const loaded = await loadAssets(phase);
 		const result = await compileAndRun({
 			source: data.source,
+			stdin: data.stdin ?? '',
 			assets: loaded,
 			onStage: (stage) => phase(stage),
 			onStdout,

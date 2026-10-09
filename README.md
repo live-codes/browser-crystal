@@ -85,7 +85,8 @@ origin.
 Verified in headless Chrome with `crossOriginIsolated === false`:
 
 - **Compiling and running what you type**, in the tab — including `begin`/`rescue`/`ensure`, which
-  is what the exception work was for. `test/demo.mjs` checks the same code path under Node.
+  is what the exception work was for, and a stdin box, so a program that calls `gets` reads what you
+  type into it. `test/demo.mjs` checks the same code path under Node.
 - **The precompiled samples** (`public/index.html`): strings and interpolation, arrays/hashes/blocks,
   structs/classes/modules/operator overloading, `Int32?` unions and `case … when Nil`, `gets` over
   `fd_read`, and `Regex` (PCRE2, built for wasm).
