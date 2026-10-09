@@ -5,9 +5,9 @@
 #
 # Everything is gzipped and the page inflates it itself (DecompressionStream), so
 # no server configuration is needed and any static host works. Gzipped, the whole
-# payload is ~24 MB; uncompressed it is ~110 MB. The directory is gitignored.
+# payload is ~24 MB, from ~100 MB raw. The directory is gitignored.
 #
-#   compiler.wasm.gz   the wasm Crystal compiler (release, --strip-debug)
+#   compiler.wasm.gz   the wasm Crystal compiler (release, --strip-debug, wasm-opt -Oz)
 #   lld.wasm.gz        clang-wasm's lld
 #   stdlib.json.gz     the patched stdlib as { "path": "contents" }
 #   lib/…​.a.gz         the libraries wasm-ld links against (with the eh/ variants)
@@ -32,7 +32,25 @@ find "$DEST/lib" -type f -name '*.a' -delete
 gz() { gzip -9 -c "$1" > "$2"; }
 
 echo "=== compiler ==="
-gz "$OUT/crystal.wasm" "$DEST/compiler.wasm.gz"
+# `wasm-opt -Oz` takes the module from 59 MB to 35.5 MB raw and 14.5 MB to 11.8 MB
+# gzipped -- 40% of the bytes the browser has to compile, which is latency and
+# memory. It rewrites the whole module (including libLLVM's and libc++'s code),
+# which is why it is more effective than any Crystal-side flag.
+#
+# NOT `-all`: one of those passes emits a module V8 rejects ("unknown import
+# kind 0x7e"). `-Oz --enable-exception-handling` alone is validated in V8.
+#
+# It also drops the `name` section, so the page's stack traces lose their
+# function names. `link.sh`'s crystal.wasm keeps them; that is the artifact to
+# debug the compiler with, this is the one to ship.
+WASM_OPT="${WASM_OPT:-/opt/emsdk/upstream/bin/wasm-opt}"
+if [ ! -x "$WASM_OPT" ]; then
+  echo "wasm-opt not found at $WASM_OPT — set WASM_OPT= to emsdk's wasm-opt" >&2
+  exit 1
+fi
+"$WASM_OPT" -Oz --enable-exception-handling "$OUT/crystal.wasm" -o "$DEST/compiler.wasm" || exit 1
+gz "$DEST/compiler.wasm" "$DEST/compiler.wasm.gz"
+rm -f "$DEST/compiler.wasm"
 ls -l "$DEST/compiler.wasm.gz"
 
 echo "=== lld ==="
@@ -75,7 +93,9 @@ copy "$SYSROOT/libwasi-emulated-signal.a"           "lib/libwasi-emulated-signal
 copy "$SYSROOT/libwasi-emulated-mman.a"             "lib/libwasi-emulated-mman.a"
 copy "$SYSROOT/libwasi-emulated-getpid.a"           "lib/libwasi-emulated-getpid.a"
 copy "$SYSROOT/libwasi-emulated-process-clocks.a"   "lib/libwasi-emulated-process-clocks.a"
-copy "$SYSROOT/eh/libc++.a"                         "lib/eh/libc++.a"
+# libc++abi and libunwind are the wasm EH runtime a Crystal program needs
+# (personality, `_Unwind_*`); `libc++.a` is not shipped -- a Crystal program has
+# no C++ in it, and it is 2.7 MB of the payload. See crystal-demo.js.
 copy "$SYSROOT/eh/libc++abi.a"                      "lib/eh/libc++abi.a"
 copy "$SYSROOT/eh/libunwind.a"                      "lib/eh/libunwind.a"
 copy "$PCRE_LIB/libpcre2-8.a"                       "lib/libpcre2-8.a"

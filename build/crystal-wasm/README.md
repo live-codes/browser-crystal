@@ -478,22 +478,36 @@ server configuration, any static host:
 
 | | raw | gzipped |
 | --- | --- | --- |
-| `compiler.wasm` (`--release`, `--strip-debug`) | 59 MB | 14.5 MB |
+| `compiler.wasm` (`--release`, `--strip-debug`, `wasm-opt -Oz`) | 35.5 MB | 11.8 MB |
 | `lld.wasm` (clang-wasm's) | 21 MB | 7.8 MB |
 | `stdlib.json` (the patched stdlib, 1369 files) | 6.3 MB | 1.3 MB |
-| `lib/…` (sysroot, PCRE2, clang_rt) | 14 MB | 3.2 MB |
-| **total** | **110 MB** | **27 MB** |
+| `lib/…` (sysroot, PCRE2, clang_rt — no libc++) | 5.4 MB | 1.7 MB |
+| **total** | **68 MB** | **22.8 MB** |
 
-Three things did that, in order of size: **gzip** (~4×), dropping the DWARF
-(`--strip-debug`: 79 → 59 MB, keeping the `name` section because named wasm stack
-traces are how this project debugs itself — `--strip-all` saves another 12 MB raw
-but only 1 MB gzipped), and **dropping `compiler/` from the shipped stdlib** — it
-is the compiler's own source, 3.5 MB of the 9.5 MB, and a program being compiled
-never requires it.
+Four things did that, in order of size:
 
-Verified in headless Chrome with `crossOriginIsolated === false`, ~16 s for the
-first run (asset load, module compile, program compile) and ~11 s after, including
-`begin`/`rescue`/`ensure`.
+- **`wasm-opt -Oz`** on the linked module: 59 → 35.5 MB raw (14.5 → 11.8 MB
+  gzipped). It rewrites *everything*, including libLLVM's and libc++'s code, so it
+  does more than any Crystal-side flag could. Not `-all`, though: one of those
+  passes emits a module V8 rejects (`unknown import kind 0x7e`). It also drops the
+  `name` section — that is the 40% of raw bytes the browser no longer has to
+  compile, and `link.sh`'s `crystal.wasm` still has them for debugging.
+- **gzip** (~4×), which the page inflates itself, so no server configuration.
+- **`--strip-debug`** at link (79 → 59 MB): DWARF, and deliberately *not* the
+  `name` section — `--strip-all` would save another 12 MB raw but only 1 MB
+  gzipped, and named wasm stack traces are how this project debugs itself.
+- **Dropping code nothing needs**: `compiler/` from the shipped stdlib (3.5 MB of
+  9.5 MB — a program being compiled never requires it) and **`libc++.a`** (2.7 MB
+  gzipped). A Crystal program is not C++; what it needs from the C++ runtime is
+  the wasm EH personality and `_Unwind_*`, which are libc++abi and libunwind. The
+  compiler's own link echo confirms it: `wasm-ld out.o.wasm -o out.o -lc`.
+
+What is left is mostly `lld.wasm` — 7.8 MB of the 22.8, because it is a *generic*
+lld (ELF, COFF, Mach-O and wasm) and `wasm-opt` barely touches it (20.80 → 20.38
+MB raw). A wasm-only lld would be the next real win, and it is a port, not a flag.
+
+Verified in headless Chrome with `crossOriginIsolated === false`, ~15 s per
+compile after the first run, including `begin`/`rescue`/`ensure`.
 
 ## Reproduce
 

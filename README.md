@@ -33,7 +33,7 @@ everything learned the hard way — **start there if you are picking this up**.
 ## Run it
 
 ```bash
-npm run demo:assets   # once — build the demo's payload (Linux or WSL; downloads 27 MB)
+npm run demo:assets   # once — build the demo's payload (Linux or WSL; downloads 23 MB)
 npm start             # → http://localhost:8127/demo.html
 ```
 
@@ -64,9 +64,9 @@ the worker, so Stop throws it away and the page survives it.
 | `public/crystal-demo.js` | compile → link → run, in ~200 lines; the same code runs in Node |
 | `public/vendor/browser_wasi_shim/` | the WASI host, and the filesystem the compiler needs |
 
-First run is slow — it downloads 27 MB of gzipped assets and compiles a 59 MB wasm module — and
+First run is slow — it downloads 23 MB of gzipped assets and compiles a 35 MB wasm module — and
 later runs reuse the compiled modules, so only the user's program is compiled. Measured in headless
-Chrome: ~16 s for the first run, ~11 s after (of which ~0.1 s is linking).
+Chrome: ~16 s for the first run, ~15 s after (of which ~0.1 s is linking).
 
 `public/index.html` is the original page: a set of precompiled samples that run in the tab, with a
 smaller hand-written WASI host (`public/wasi-preview1.js`, eight functions, no filesystem). It is
@@ -88,7 +88,7 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 | | why |
 | --- | --- |
-| **A small first load** | 27 MB gzipped, and 14.5 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm. Fine over a LAN; a distribution would want less. |
+| **A small first load** | 23 MB gzipped. 11.8 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm — and 7.8 MB is the linker, which is a *generic* lld (ELF, COFF, Mach-O and wasm). A wasm-only lld is the next real win, but it is a port, not a flag. |
 | **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
 | **`Regex` in a compiled program** | it needs `libpcre2-8.a`, which the demo links — but only because the toolchain list says so; a program that ships its own shims can get further than the samples page does |
 | **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |

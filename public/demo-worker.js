@@ -5,19 +5,18 @@
 // worker, and the page can throw it away with `terminate()`.
 //
 // Assets are fetched and compiled once, then reused for every run — compiling a
-// 59 MB wasm module is the slowest thing that happens, and it should not happen
+// 35 MB wasm module is the slowest thing that happens, and it should not happen
 // twice.
 //
 // Everything arrives gzipped and is inflated here (`DecompressionStream`), so the
 // server needs no content-encoding configuration and any static host will do.
-// That is what makes the payload ~24 MB instead of ~110 MB.
+// That is what makes the payload 23 MB instead of 68 MB.
 import { compileAndRun } from './crystal-demo.js';
 
 const LIBRARIES = [
 	'lib/libc.a',
 	'lib/libpcre2-8.a',
 	'lib/libclang_rt.builtins.a',
-	'lib/eh/libc++.a',
 	'lib/eh/libc++abi.a',
 	'lib/eh/libunwind.a',
 	'lib/libwasi-emulated-signal.a',
@@ -48,7 +47,7 @@ let assets = null;
 async function loadAssets(phase) {
 	if (assets) return assets;
 
-	phase('loading the compiler (15 MB)');
+	phase('loading the compiler (12 MB)');
 	const compiler = await WebAssembly.compile(await fetchGzip('compiler.wasm.gz'));
 
 	phase('loading the linker (8 MB)');

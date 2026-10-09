@@ -363,9 +363,9 @@ two-stacks trap (Crystal's linear stack vs V8's native stack, and why `-z stack-
 `RangeError`) — is in
 [`build/crystal-wasm/README.md`](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
-**Still to do:** the payload is now 27 MB gzipped (110 MB raw) — the compiler is 14.5 MB of that,
-and it is the whole compiler plus the whole standard library compiled to wasm. Shrinking it further
-is the one open item; the pipeline itself is proved, end to end, in the browser.
+**Still to do:** the payload is 22.8 MB gzipped (68 MB raw) — 11.8 MB of it the compiler, and 7.8 MB
+the linker, which is a *generic* lld. A wasm-only lld is the next real win, and it is a port, not a
+flag. The pipeline itself is proved, end to end, in the browser.
 
 **The honest headline.** The question this document opened with — can Crystal's compiler run in
 a browser — is now answered in the affirmative: libLLVM-for-wasm exists and is verified; the

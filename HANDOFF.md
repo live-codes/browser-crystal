@@ -246,16 +246,21 @@ The exception blocker is closed (§6). What is left is the browser:
    compiler emits, run as a WASI command in the same host (no host tool), and the result runs.
    Two facts worth keeping: `lld.wasm` is a *generic* lld driver and must be invoked as
    **`wasm-ld`** (argv[0] dispatch), and its **LLVM 22 links our LLVM 20 object** fine. The link
-   needs the **`eh/` sysroot libs** (`libunwind.a`, `libc++abi.a`, `libc++.a`) — clang-wasm's own
-   bundled sysroot deliberately excludes `eh/` — so those ship with the page (§7.2).
+   needs the **`eh/` sysroot libs** — `libc++abi.a` and `libunwind.a` (the wasm EH personality and
+   `_Unwind_*`); clang-wasm's own bundled sysroot deliberately excludes `eh/`, so those ship with
+   the page (§7.2).
 2. **Assets.** `build/crystal-wasm/demo-assets.sh` collects everything the demo needs into
    `public/crystal-demo/` (gitignored): the compiler, lld, a `stdlib.json` (the patched stdlib) and
-   the `lib/…` archives from wasi-sdk-33 plus PCRE2 and clang_rt. **All gzipped — 27 MB total, down
-   from 110 MB uncompressed.** Three things got it there: gzip (~4×, the page inflates it with
-   `DecompressionStream`), `-Wl,--strip-debug` in `link.sh` (79 → 59 MB; keeps the `name` section,
-   which is how this project reads wasm stack traces), and dropping `compiler/` from the shipped
-   stdlib (3.5 MB of 9.5 MB, never required by a program being compiled). A distribution would still
-   want a smaller compiler — that is the one open item.
+   the `lib/…` archives from wasi-sdk-33 plus PCRE2 and clang_rt. **All gzipped — 22.8 MB total,
+   down from 68 MB raw (and 110 MB before the trimming started).** Four things got it there:
+   **`wasm-opt -Oz --enable-exception-handling`** on the linked module (59 → 35.5 MB raw; do *not*
+   use `-all`, one of those passes emits a module V8 rejects — `unknown import kind 0x7e`), **gzip**
+   (~4×, the page inflates with `DecompressionStream`), **`-Wl,--strip-debug`** in `link.sh` (79 → 59
+   MB, keeping the `name` section because named wasm stack traces are how this project debugs
+   itself), and **dropping code nothing needs** — `compiler/` from the shipped stdlib and `libc++.a`
+   (a Crystal program is not C++; it needs libc++abi and libunwind for the EH runtime, which stay).
+   What is left is mostly `lld.wasm`: 7.8 MB, because it is a *generic* lld and `wasm-opt` barely
+   touches it (20.80 → 20.38 MB). **A wasm-only lld is the next real win, and it is a port.**
 3. ~~**The page.**~~ **Done — `public/demo.html`.** An editable editor that compiles, links and
    runs in the tab: `public/demo-worker.js` (fetches and caches the compiled modules) →
    `public/crystal-demo.js` (compile → link → run, ~200 lines, no browser-only API, so
