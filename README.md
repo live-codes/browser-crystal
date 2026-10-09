@@ -27,6 +27,10 @@ required work that existed nowhere else:
   codegen patch plus two LLVM options the C API cannot set. See
   [build/crystal-wasm/README.md §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
+The deliverable for LiveCodes is [`packages/crystal-wasm`](packages/crystal-wasm) —
+`@live-codes/crystal-wasm`, the language package, in the shape `browser-nim`'s is: the assets it
+ships, the API LiveCodes calls, and the tests that check it.
+
 [FINDINGS.md](FINDINGS.md) is the narrative; [HANDOFF.md](HANDOFF.md) is the state of the work and
 everything learned the hard way — **start there if you are picking this up**.
 
@@ -37,18 +41,18 @@ npm run demo:assets   # once — build the payload (Linux or WSL; about 22 MB of
 npm start             # → http://localhost:8127/
 ```
 
-`npm run demo:assets` collects the compiler, the linker, the standard library and the sysroot
-archives into `public/crystal-demo/`, gzipped, which is gitignored — they are far too large to
-commit and building them is a long pipeline whose result is reproducible. The page inflates them
-itself (`DecompressionStream`), so any static host works. Without them the page loads and reports
-what is missing.
+`npm run demo:assets` builds the compiler, the linker, the standard library and the sysroot archives
+into the package's `packages/crystal-wasm/assets/crystal/`, gzipped, which is gitignored — they are
+far too large to commit and building them is a long pipeline whose result is reproducible. The page
+inflates them itself (`DecompressionStream`), so any static host works. Without them the page loads
+and reports what is missing.
 
 A static server is required — ES modules and Workers do not load over `file://` — but it is a plain
 file server and compiles nothing. `serve.mjs` sends `Content-Type: application/wasm`, without which
 `WebAssembly.compileStreaming` refuses the response.
 
-There is no `npm install`: the page has no dependencies, and the one piece of third-party host code
-(the WASI shim) is vendored into `public/vendor/`.
+There is no `npm install`: neither the page nor the package has a dependency, and the one piece of
+third-party host code (the WASI shim) is vendored into `packages/crystal-wasm/vendor/`.
 
 ## The demo
 
@@ -63,9 +67,14 @@ arrays/hashes/blocks, structs/classes/modules/operator overloading, `Int32?` uni
 | file | what it is |
 | --- | --- |
 | `public/index.html` | the page: editor, Run/Stop, output, stdin box, phase timings |
-| `public/demo-worker.js` | fetches and compiles the assets once, then drives a run |
-| `public/crystal-demo.js` | compile → link → run, in ~200 lines; the same code runs in Node |
-| `public/vendor/browser_wasi_shim/` | the WASI host, and the filesystem the compiler needs |
+| `public/demo-worker.js` | the page's side of the package: a message protocol, and what the output pane shows |
+| `packages/crystal-wasm/` | **the language package** — compile → link → run, the assets, and the tests |
+
+The page is a consumer of `packages/crystal-wasm` (imported from `../packages/crystal-wasm`,
+served by `serve.mjs`), which is the same package published as
+[`@live-codes/crystal-wasm`](packages/crystal-wasm) for LiveCodes — the shape
+[`@live-codes/nim-wasm`](https://github.com/live-codes/browser-nim) has. Everything about
+compiling Crystal lives there; the page only draws it.
 
 First run is slow — it downloads about 22 MB of gzipped assets and compiles a 35 MB wasm module —
 and later runs reuse the compiled modules, so only the user's program is compiled. Measured in
@@ -85,7 +94,7 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 - **Compiling and running what you type**, in the tab — including `begin`/`rescue`/`ensure`, which
   is what the exception work was for, and a stdin box, so a program that calls `gets` reads what you
-  type into it. `test/demo.mjs` checks the same code path under Node.
+  type into it. The package's tests check the same code path under Node.
 - **All eight samples**, which between them cover the language surface above — in particular the
   regex sample, which is the one that needs a library wasi-libc does not carry.
 - Program output streams as it is produced, and programs run off the main thread.
@@ -105,22 +114,28 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 | what | command |
 | --- | --- |
-| the page's compile → link → run, under Node | `npm test` |
-| syntax-check the server and client modules | `npm run check` |
+| the package: compile → link → run under Node, with stdin, argv and a compile error | `npm test` |
+| syntax-check the server, the page's worker and the package | `npm run check` |
 | rebuild the payload | `npm run demo:assets` |
 | serve the page | `npm start` → http://localhost:8127/ |
 
-`npm test` is the one that matters: the page's core has no browser-only API, so the whole chain —
-including a program that raises and rescues — is checked in Node against the same assets the page
-fetches. What the browser adds is asset loading and the UI.
+`npm test` is the one that matters: the package's core has no browser-only API, so the
+whole chain — including a program that raises and rescues, one that reads stdin, one that
+requires a second file — is checked in Node against the same assets the page fetches. What
+the browser adds is asset loading and the UI.
+
+The assets are `packages/crystal-wasm/assets/crystal/`, gitignored and built by the
+package's `build-assets.sh`; their bytes are pinned in the package's
+`src/asset-receipts.js`, which `npm pack` checks. See
+[packages/crystal-wasm/docs/ASSETS.md](packages/crystal-wasm/docs/ASSETS.md).
 
 ## Layout
 
 ```
-public/            the page, its worker, the compile → link → run core, and the vendored WASI host
-build/llvm-wasm/   libLLVM for wasm32-wasip1 (committed output, ~140 MB, on purpose)
-build/crystal-wasm/ the compiler pipeline, the payload script, and the lld/exception notes
-test/demo.mjs      the Node harness for the same code the page runs
+public/                     the page and its worker
+packages/crystal-wasm/      the language package: compile → link → run, assets, tests, docs
+build/llvm-wasm/            libLLVM for wasm32-wasip1 (committed output, ~140 MB, on purpose)
+build/crystal-wasm/         the compiler pipeline, and the lld/exception notes
 ```
 
 ## Licensing and provenance
@@ -133,12 +148,18 @@ MIT for the code here, and for the Crystal standard library that ends up inside 
 - **wasi-sdk 33** (clang, wasm-ld's libraries, the sysroot) — Apache-2.0 WITH LLVM-exception / MIT.
 - **PCRE2** — BSD-3-Clause — built for wasm32-wasi, for `Regex`.
 - **`lld.wasm`** comes from [`clang-wasm`](https://github.com/live-codes/clang-wasm) (LLVM 22,
-  Apache-2.0 WITH LLVM-exception); `build/crystal-wasm/demo-assets.sh` copies it in.
-- **`@bjorn3/browser_wasi_shim`** v0.4.2 — MIT OR Apache-2.0 — vendored into `public/vendor/`, with
-  its licence files, as the compiler's WASI host.
+  Apache-2.0 WITH LLVM-exception); the package's `build-assets.sh` copies it in.
+- **`@bjorn3/browser_wasi_shim`** v0.4.2 — MIT OR Apache-2.0 — vendored into
+  `packages/crystal-wasm/vendor/`, with its licence files, as the compiler's WASI host.
+
+The package's own [THIRD-PARTY-NOTICES.md](packages/crystal-wasm/THIRD-PARTY-NOTICES.md) is the
+authoritative list for what it ships.
 
 ## Status
 
 The question this repository opened with — *can Crystal's compiler run in a browser* — is answered:
-it does, and the page is the proof. What is left is packaging it so LiveCodes can use it, which is
-[HANDOFF.md](HANDOFF.md) §7.
+it does, the page is the proof, and it is packaged —
+[`@live-codes/crystal-wasm`](packages/crystal-wasm), in the shape
+[`@live-codes/nim-wasm`](https://github.com/live-codes/browser-nim) has, for LiveCodes to use. What
+is left is separating the one artifact here that is not Crystal's — libLLVM-for-wasm, so that other
+LLVM-based ports can reuse it — which is [HANDOFF.md](HANDOFF.md) §7.

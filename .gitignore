@@ -13,9 +13,9 @@ __pycache__/
 build/llvm-wasm/verify/*.o
 build/llvm-wasm/verify/*.wasm
 
-# The demo's payload (build/crystal-wasm/demo-assets.sh): about 22 MB gzipped —
-# the compiler (12 MB of it), the linker (8 MB), the standard library (1.3 MB)
-# and the sysroot archives. Too large to commit; regenerate with
-# `npm run demo:assets` (Linux or WSL). public/vendor/ is small and committed, so
-# the page itself needs no build step beyond this.
-public/crystal-demo/
+# The language package's payload (packages/crystal-wasm/build-assets.sh): about 22 MB
+# gzipped — the compiler (12 MB of it), the linker (8 MB), the standard library
+# (1.3 MB) and the sysroot archives. Too large to commit; regenerate with
+# `npm run demo:assets` (Linux or WSL). The receipts that pin its bytes are
+# committed, and `npm pack` refuses to publish without matching assets.
+packages/crystal-wasm/assets/crystal/

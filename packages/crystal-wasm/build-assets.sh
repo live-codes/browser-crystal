@@ -1,11 +1,13 @@
 #!/bin/bash
-# demo-assets.sh — collect what the in-browser demo fetches into public/crystal-demo/.
+# build-assets.sh — build the payload this package ships, into assets/crystal/.
 #
-#   bash demo-assets.sh          # run in the racket-build WSL distro
+#   bash packages/crystal-wasm/build-assets.sh     # run in the racket-build WSL distro
 #
-# Everything is gzipped and the page inflates it itself (DecompressionStream), so
-# no server configuration is needed and any static host works. Gzipped, the whole
-# payload is ~24 MB, from ~100 MB raw. The directory is gitignored.
+# Everything is gzipped and the loader inflates it itself (DecompressionStream in
+# the page, zlib in Node), so no server configuration is needed and any static host
+# works. Gzipped, the whole payload is ~22 MB, from ~68 MB raw. assets/ is
+# gitignored; the receipts that pin these bytes are written at the end of this
+# script and are committed.
 #
 #   compiler.wasm.gz   the wasm Crystal compiler (release, --strip-debug, wasm-opt -Oz)
 #   lld.wasm.gz        clang-wasm's lld
@@ -15,12 +17,13 @@
 # Sources: $OUT (the WSL build tree), clang-wasm's asset cache, and wasi-sdk-33.
 set -uo pipefail
 
-REPO=${REPO:-/mnt/d/DevWork/live-codes/browser-crystal}
+DIR=${DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 CLANG_WASM=${CLANG_WASM:-/mnt/d/DevWork/live-codes/clang-wasm}
 OUT=${OUT:-/root/bc-crystal}
 WASI_SDK=${WASI_SDK:-/opt/wasi-sdk-33}
 PCRE_LIB=${PCRE_LIB:-/root/bc-pcre2/build}
-DEST="$REPO/public/crystal-demo"
+NODE=${NODE:-node}
+DEST="$DIR/assets/crystal"
 
 SYSROOT="$WASI_SDK/share/wasi-sysroot/lib/wasm32-wasip1"
 CLANG_RT="$WASI_SDK/lib/clang/22/lib/wasm32-unknown-wasip1"
@@ -95,11 +98,17 @@ copy "$SYSROOT/libwasi-emulated-getpid.a"           "lib/libwasi-emulated-getpid
 copy "$SYSROOT/libwasi-emulated-process-clocks.a"   "lib/libwasi-emulated-process-clocks.a"
 # libc++abi and libunwind are the wasm EH runtime a Crystal program needs
 # (personality, `_Unwind_*`); `libc++.a` is not shipped -- a Crystal program has
-# no C++ in it, and it is 2.7 MB of the payload. See crystal-demo.js.
+# no C++ in it, and it is 2.7 MB of the payload. See src/engine.js.
 copy "$SYSROOT/eh/libc++abi.a"                      "lib/eh/libc++abi.a"
 copy "$SYSROOT/eh/libunwind.a"                      "lib/eh/libunwind.a"
 copy "$PCRE_LIB/libpcre2-8.a"                       "lib/libpcre2-8.a"
 copy "$CLANG_RT/libclang_rt.builtins.a"             "lib/libclang_rt.builtins.a"
+
+echo
+echo "=== receipts ==="
+# Pins exactly these bytes; every read is checked against them, so this is the step
+# that says "these assets, and no others".
+(cd "$DIR" && "$NODE" scripts/write-receipts.mjs) || exit 1
 
 echo
 echo "=== what the page fetches ==="

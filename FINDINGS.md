@@ -61,8 +61,8 @@ the demo, compiled by the compiler on the page, and all eight of its samples pas
 
 All six exit 0. In the spike `npm test` ran the same modules against Node's WASI implementation
 instead — a different host from the page's hand-written one — so it checked the artifacts rather
-than the page. That is the role `test/demo.mjs` plays now, except that it drives the page's own code
-against the same assets the page fetches.
+than the page. That is the role the package's `npm test` plays now, except that it drives the page's
+own code against the same assets the page fetches.
 
 ## 2. The blocker: Crystal's compiler cannot run in a browser
 

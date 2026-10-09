@@ -1,9 +1,10 @@
 // Static file server for the demo page.
 //
-//   node serve.mjs        # http://localhost:8127
+//   node serve.mjs        # http://localhost:8127/
 //
-// It does not compile anything — the page compiles Crystal in the tab. It is
-// here because
+// It serves two trees: the page (public/) and the language package the page uses
+// (packages/, which includes the payload it loads). It compiles nothing — the page
+// compiles Crystal in the tab. The server is here because
 //
 //   * ES modules and Web Workers do not load over file://, and
 //   * .wasm has to be sent as `application/wasm`, or WebAssembly.compileStreaming
@@ -13,7 +14,12 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const repo = import.meta.dirname;
-const pages = resolve(repo, 'public');
+
+// Longest prefix wins, so /packages/… is not swallowed by the site's /.
+const routes = [
+	{ prefix: '/packages/', root: resolve(repo, 'packages') },
+	{ prefix: '/', root: resolve(repo, 'public') }
+];
 
 const MIME = {
 	'.html': 'text/html; charset=utf-8',
@@ -25,6 +31,7 @@ const MIME = {
 	'.cr': 'text/plain; charset=utf-8',
 	'.md': 'text/markdown; charset=utf-8',
 	'.png': 'image/png',
+	'.gz': 'application/gzip'
 };
 
 const send = (res, status, type, body) => {
@@ -35,12 +42,16 @@ const send = (res, status, type, body) => {
 const server = createServer(async (req, res) => {
 	try {
 		const requested = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-		const relative = requested === '/' ? 'index.html' : requested.replace(/^\//, '');
+		const route = routes
+			.filter(({ prefix }) => requested === prefix || requested.startsWith(prefix))
+			.sort((a, b) => b.prefix.length - a.prefix.length)[0];
 
-		// public/ is the site. A top-level markdown file is served as well, so
-		// the page can link to the findings sitting next to it.
-		const base = /^[^/]+\.md$/.test(relative) ? repo : pages;
-		const target = resolve(join(base, normalize(relative)));
+		// A top-level markdown file is served as well, so the page can link to the
+		// findings sitting next to it.
+		const topLevelMarkdown = /^\/[^/]+\.md$/.test(requested);
+		const base = topLevelMarkdown ? repo : route.root;
+		const rest = requested === '/' ? 'index.html' : requested.slice(route.prefix.length);
+		const target = resolve(join(base, normalize(rest)));
 
 		// However the path was spelled, nothing outside the served directory is ours.
 		if (!target.startsWith(base + sep)) {
@@ -49,7 +60,7 @@ const server = createServer(async (req, res) => {
 		}
 
 		if (!(await stat(target).catch(() => null))?.isFile()) {
-			send(res, 404, 'text/plain; charset=utf-8', `Not found: /${relative}`);
+			send(res, 404, 'text/plain; charset=utf-8', `Not found: ${requested}`);
 			return;
 		}
 

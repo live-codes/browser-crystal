@@ -413,11 +413,9 @@ function onMessage(message) {
       clearTimeout(watchdog);
       finish();
       state.exitCode = String(message.exitCode);
-      const phases = Object.entries(message.phases)
-        .map(([stage, ms]) => `${stage} ${(ms / 1000).toFixed(1)}s`)
-        .join(' · ');
+      const phases = `compile ${(message.compileMs / 1000).toFixed(1)}s · run ${(message.runMs / 1000).toFixed(1)}s`;
       outputMeta.textContent = `${(message.ms / 1000).toFixed(1)}s total`;
-      timings.textContent = phases ? `· ${phases}` : '';
+      timings.textContent = `· ${phases}`;
       state.phases = phases;
       if (message.exitCode === 0) setState('ok', `done in ${(message.ms / 1000).toFixed(1)}s`);
       else setState('error', `exited with code ${message.exitCode}`);

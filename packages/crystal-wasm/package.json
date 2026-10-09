@@ -1,0 +1,46 @@
+{
+  "name": "@live-codes/crystal-wasm",
+  "version": "0.1.0",
+  "description": "Run Crystal in the browser, on the Crystal compiler compiled to WebAssembly",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/live-codes/browser-crystal",
+    "directory": "packages/crystal-wasm"
+  },
+  "exports": {
+    ".": {
+      "node": "./src/index.node.js",
+      "browser": "./src/index.js",
+      "default": "./src/index.js"
+    }
+  },
+  "bin": {
+    "crystal-wasm-copy-assets": "./bin/copy-assets.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "scripts",
+    "docs",
+    "assets",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "assets": "bash build-assets.sh",
+    "receipts": "node scripts/write-receipts.mjs",
+    "prepack": "node scripts/check-assets.mjs",
+    "test": "node --experimental-wasm-exnref --test"
+  },
+  "keywords": [
+    "crystal",
+    "wasm",
+    "webassembly",
+    "compiler",
+    "playground"
+  ]
+}

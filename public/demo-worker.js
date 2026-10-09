@@ -4,105 +4,50 @@
 // interrupted from the inside, so it runs here: a runaway compile blocks this
 // worker, and the page can throw it away with `terminate()`.
 //
-// Assets are fetched and compiled once, then reused for every run — compiling a
-// 35 MB wasm module is the slowest thing that happens, and it should not happen
-// twice.
+// Everything about compiling Crystal lives in the package — `@live-codes/crystal-wasm`,
+// imported from ../packages/crystal-wasm for the same reason the page imports
+// anything else from this repo. What is left here is the page's side of it: a
+// message protocol, and the policy for what the output pane shows.
+import { createCompiler } from '../packages/crystal-wasm/src/index.js';
+
+// The package's payload, which serve.mjs serves straight out of the package. A
+// consumer outside this repo runs `crystal-wasm-copy-assets` and points baseUrl at
+// the copy instead — see the package's README.
+const baseUrl = new URL('../packages/crystal-wasm/assets/crystal/', self.location.href);
+
+// The compiler and the linker both say things that are not about the program:
+// Crystal echoes the link command it *would* have run (`wasm-ld out.o.wasm -o
+// out.o -lc`, which is not the link we do), and lld warns about a signature
+// mismatch between Crystal's `_Unwind_SetIP` binding and libunwind's wasm port
+// (known, benign, and documented).
 //
-// Everything arrives gzipped and is inflated here (`DecompressionStream`), so the
-// server needs no content-encoding configuration and any static host will do.
-// That is what makes the payload 23 MB instead of 68 MB.
-import { compileAndRun } from './crystal-demo.js';
+// What does belong is a compiler warning *about this program*, which arrives on the
+// compiler's stderr. So build output is buffered rather than streamed, and on
+// success only those chunks are shown; a failed build sends its diagnostics the
+// usual way, through the error.
+const buildOutput = [];
 
-const LIBRARIES = [
-	'lib/libc.a',
-	'lib/libpcre2-8.a',
-	'lib/libclang_rt.builtins.a',
-	'lib/eh/libc++abi.a',
-	'lib/eh/libunwind.a',
-	'lib/libwasi-emulated-signal.a',
-	'lib/libwasi-emulated-mman.a',
-	'lib/libwasi-emulated-getpid.a',
-	'lib/libwasi-emulated-process-clocks.a'
-];
-
-const url = (path) => new URL(`./crystal-demo/${path}`, self.location.href).href;
-
-async function fetchGzip(path) {
-	const response = await fetch(url(path));
-	if (!response.ok) {
-		throw new Error(
-			`could not fetch crystal-demo/${path} (${response.status}). ` +
-				'Run build/crystal-wasm/demo-assets.sh to build the demo assets.'
-		);
-	}
-	if (typeof DecompressionStream !== 'function') {
-		throw new Error('this browser has no DecompressionStream, which the demo needs to inflate its assets');
-	}
-	const inflated = response.body.pipeThrough(new DecompressionStream('gzip'));
-	return new Uint8Array(await new Response(inflated).arrayBuffer());
-}
-
-let assets = null;
-
-async function loadAssets(phase) {
-	if (assets) return assets;
-
-	phase('loading the compiler (12 MB)');
-	const compiler = await WebAssembly.compile(await fetchGzip('compiler.wasm.gz'));
-
-	phase('loading the linker (8 MB)');
-	const lld = await WebAssembly.compile(await fetchGzip('lld.wasm.gz'));
-
-	phase('loading the standard library');
-	const stdlib = JSON.parse(new TextDecoder().decode(await fetchGzip('stdlib.json.gz')));
-
-	phase('loading the sysroot');
-	const libs = {};
-	for (const path of LIBRARIES) libs[path] = await fetchGzip(`${path}.gz`);
-
-	assets = { compiler, lld, stdlib, libs };
-	return assets;
-}
+const compiler = createCompiler({
+	baseUrl: baseUrl.href,
+	onStatus: (text) => self.postMessage({ type: 'phase', phase: text }),
+	onLog: (text, { stage, stream }) => buildOutput.push({ text, stage, stream }),
+	onOutput: (text, stream) =>
+		self.postMessage({ type: stream === 'out' ? 'stdout' : 'stderr', text, stage: 'running' })
+});
 
 self.addEventListener('message', async ({ data }) => {
 	if (data.type !== 'run') return;
 
-	const phase = (text) => self.postMessage({ type: 'phase', phase: text });
 	const started = performance.now();
 
-	// The compiler and the linker both say things that are not about the program:
-	// Crystal echoes the link command it *would* have run (`wasm-ld out.o.wasm -o
-	// out.o -lc`, which is not the link we do), and lld warns about a signature
-	// mismatch between Crystal's `_Unwind_SetIP` binding and libunwind's wasm
-	// port (known, benign, and documented). Neither belongs in the output pane.
-	//
-	// What does belong is a compiler warning *about this program*, which arrives
-	// on the compiler's stderr. So build output is buffered rather than streamed,
-	// and on success only that is kept; a failed build sends its diagnostics the
-	// usual way, through the error.
-	const buildOutput = [];
-	const onStdout = (text, stage) => {
-		if (stage === 'running') self.postMessage({ type: 'stdout', text, stage });
-		else buildOutput.push({ kind: 'stdout', text, stage });
-	};
-	const onStderr = (text, stage) => {
-		if (stage === 'running') self.postMessage({ type: 'stderr', text, stage });
-		else buildOutput.push({ kind: 'stderr', text, stage });
-	};
-
 	try {
-		const loaded = await loadAssets(phase);
-		const result = await compileAndRun({
-			source: data.source,
-			stdin: data.stdin ?? '',
-			assets: loaded,
-			onStage: (stage) => phase(stage),
-			onStdout,
-			onStderr
-		});
+		const instance = await compiler;
+		buildOutput.length = 0;
+
+		const result = await instance.run(data.source, data.stdin ?? '');
 
 		for (const chunk of buildOutput) {
-			if (chunk.stage === 'compiling' && chunk.kind === 'stderr') {
+			if (chunk.stage === 'compiling' && chunk.stream === 'err') {
 				self.postMessage({ type: 'stderr', text: chunk.text, stage: chunk.stage });
 			}
 		}
@@ -110,7 +55,8 @@ self.addEventListener('message', async ({ data }) => {
 		self.postMessage({
 			type: 'exit',
 			exitCode: result.exitCode,
-			phases: result.phases,
+			compileMs: result.compileMs,
+			runMs: result.runMs,
 			ms: performance.now() - started
 		});
 	} catch (error) {

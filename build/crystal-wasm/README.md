@@ -461,28 +461,35 @@ the **`eh/` variants matter**: `libunwind.a`'s `_Unwind_RaiseException` is a rea
 bundled sysroot deliberately excludes `eh/` (it builds a non-EH libc++), so those
 came from wasi-sdk-33 directly.
 
-## The demo — the whole chain behind an editor
+## The demo — the whole chain behind an editor, and the package that carries it
 
-`public/index.html` is this pipeline as a page you can type into:
+`public/index.html` is this pipeline as a page you can type into, and everything it knows about
+compiling Crystal lives in [`packages/crystal-wasm/`](../../packages/crystal-wasm) —
+`@live-codes/crystal-wasm`, the language package:
 
 ```
 public/index.html       the editor, Run/Stop, output, phase timings, and a stdin box
-public/demo-worker.js   fetches and compiles the assets once, then drives a run
-public/crystal-demo.js  compile → link → run; no browser-only API
-public/vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs
+public/demo-worker.js   the page's side of the package: a protocol and an output policy
+
+packages/crystal-wasm/
+  src/engine.js         compile → link → run; no browser-only API
+  src/api.js            createCompiler / run / dispose — the contract a language module calls
+  src/loader.js         which assets, in what order, with progress
+  src/assets.js         hosted (baseUrl) or packaged, every read receipt-checked
+  src/index.js          the browser entry; src/index.node.js reads the assets off disk
+  vendor/browser_wasi_shim/   the WASI host and the filesystem the compiler needs
+  build-assets.sh       builds the payload below into assets/crystal/ (gitignored)
+  test/compiler.test.mjs      `npm test` — the exact code the page runs, under Node
 ```
 
-`crystal-demo.js` is deliberately the same logic as `try-compile.mjs` +
-`try-link.mjs`, expressed once with no Node API — so `test/demo.mjs` runs the
-exact code the page runs, against the exact assets it fetches, and the worker adds
-only fetching, caching the compiled modules, and the protocol. The program's fd 0
-is a file holding the page's stdin box, so a program that calls `gets` reads what
-is typed there; the compiler and the linker are given the empty string, since
-neither reads stdin at all.
+`engine.js` is deliberately the same logic as `try-compile.mjs` + `try-link.mjs`, expressed once
+with no Node API — so the package's tests run the exact code the page runs, against the exact
+assets it fetches, and the worker adds only the protocol between them. The program's fd 0 is a file
+holding the page's stdin box, so a program that calls `gets` reads what is typed there; the compiler
+and the linker are given the empty string, since neither reads stdin at all.
 
-`demo-assets.sh` collects what it fetches into `public/crystal-demo/` (gitignored),
-**gzipped**, because the page inflates it itself with `DecompressionStream` — no
-server configuration, any static host:
+`build-assets.sh` collects the payload into `assets/crystal/` (gitignored), **gzipped**, because the
+loader inflates it itself with `DecompressionStream` — no server configuration, any static host:
 
 | | raw | gzipped |
 | --- | --- | --- |
@@ -491,6 +498,10 @@ server configuration, any static host:
 | `stdlib.json` (the patched stdlib, 1369 files) | 6.3 MB | 1.3 MB |
 | `lib/…` (sysroot, PCRE2, clang_rt — no libc++) | 5.4 MB | 1.7 MB |
 | **total** | **68 MB** | **22.8 MB** |
+
+Each of those is checked against a SHA-256 receipt on every read
+(`packages/crystal-wasm/src/asset-receipts.js`, written by `scripts/write-receipts.mjs`), and
+`npm pack` refuses to publish without matching assets.
 
 Four things did that, in order of size:
 
@@ -574,11 +585,11 @@ copying the old bytes in, on every write past the end. That is quadratic, and fo
 a 500 KB object it swamps everything else — the other 110k calls together are
 under 100 ms.
 
-`public/crystal-demo.js` carries a small patch for it: files grow geometrically,
-the written length is tracked separately from the buffer, every length-sensitive
-operation (`File#size`, `WHENCE_END` seeks) uses that length, and files are
-trimmed back to it before anything reads them. `fd_write` fell from 7.4 s to 86 ms
-in Node, and the browser's compile from 10–15 s to ~2 s.
+`packages/crystal-wasm/src/engine.js` carries a small patch for it: files grow
+geometrically, the written length is tracked separately from the buffer, every
+length-sensitive operation (`File#size`, `WHENCE_END` seeks) uses that length, and
+files are trimmed back to it before anything reads them. `fd_write` fell from 7.4 s to
+86 ms in Node, and the browser's compile from 10–15 s to ~2 s.
 
 Two bugs in that patch are worth not repeating: taking a buffer's *capacity* for
 the file's length (the tracked length ratchets up to the capacity — the first

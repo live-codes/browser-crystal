@@ -1,19 +1,17 @@
-// crystal-demo.js — compile and run Crystal entirely in the page.
+// engine.js — compile, link and run Crystal, with no environment of its own.
 //
 // Three WebAssembly modules run here and nothing else does any work:
 //
-//   1. compiler.wasm  the Crystal compiler (built by build/crystal-wasm/),
-//                     given the stdlib as a filesystem and the user's source,
-//                     emitting a wasm *object*;
+//   1. compiler.wasm  the Crystal compiler (built by ../../build/crystal-wasm/),
+//                     given the standard library as a filesystem and the user's
+//                     source, emitting a wasm *object*;
 //   2. lld.wasm       clang-wasm's lld, run as `wasm-ld`, linking that object
 //                     against the sysroot libraries into a runnable module;
 //   3. that module    the user's program, run for its output.
 //
-// The WASI host is the vendored `browser_wasi_shim` (public/vendor/), which
-// supplies the in-memory filesystem the compiler needs. This module has no
-// imports beyond that, so it runs unchanged in a browser worker and in Node —
-// `test/demo.mjs` drives it in Node, which is how it is checked without a
-// browser.
+// The WASI host is the vendored `browser_wasi_shim` (../vendor/), which supplies
+// the in-memory filesystem the compiler needs. Nothing in this file touches a
+// browser API, so the same code runs in a page, in a worker and in Node.
 import {
 	ConsoleStdout,
 	Directory,
@@ -22,15 +20,16 @@ import {
 	PreopenDirectory,
 	WASI,
 	wasi as wasiDefs
-} from './vendor/browser_wasi_shim/index.js';
+} from '../vendor/browser_wasi_shim/index.js';
 
 const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
 
 // Crystal colourises its diagnostics, and those escape sequences would arrive in
-// the page as literal "[4m" text. Build output is plain; a *program's* output is
+// a page as literal "[4m" text. Build output is plain; a *program's* output is
 // left alone, because a program may colourise on purpose.
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
-const plain = (text) => text.replace(ANSI, '');
+export const stripAnsi = (text) => text.replace(ANSI, '');
 
 // browser_wasi_shim grows a file by allocating exactly what the write needs and
 // copying the old bytes in, on *every* write that lands past the end:
@@ -131,19 +130,23 @@ function trimWrittenFiles(dir) {
 
 patchFileGrowth();
 
-// The compiler's own flags, mirroring build/crystal-wasm/cross-compile.sh: the
-// `without_*` flags drop compiler-only tooling and `use_pcre2` avoids a
+/** The name the compiled program sees as `PROGRAM_NAME`. */
+export const PROGRAM_NAME = 'program';
+
+// The compiler's own flags, mirroring ../../build/crystal-wasm/cross-compile.sh:
+// the `without_*` flags drop compiler-only tooling and `use_pcre2` avoids a
 // `pkg-config` shell-out (WASI has no processes). wasm exception handling is
 // enabled by the compiler itself for a wasm target.
 //
 // argv[0] is the program name: Crystal's ARGV is *everything after it*, so the
-// leading "crystal" is what makes "build" the command rather than the first
-// flag. (clang-wasm's host inserts a program name for you; browser_wasi_shim,
-// which this uses, does not.)
-export const COMPILER_ARGS = [
+// leading "crystal" is what makes "build" the command rather than the first flag.
+// (clang-wasm's host inserts a program name for you; browser_wasi_shim, which
+// this uses, does not.)
+export const compilerArgs = (extra = []) => [
 	'crystal', 'build', '--cross-compile', '--target=wasm32-unknown-wasi',
 	'-Di_know_what_im_doing', '-Dwithout_playground', '-Dwithout_docs',
 	'-Dwithout_interpreter', '-Duse_pcre2',
+	...extra,
 	'-o', 'out.o.wasm', 'main.cr'
 ];
 
@@ -158,7 +161,8 @@ export const COMPILER_ARGS = [
 // payload. If a program ever does need it, the linker says so by name.
 //
 // lld dispatches on argv[0], and this is a *generic* lld: without the leading
-// "wasm-ld" it refuses to do anything.
+// "wasm-ld" it refuses to do anything. Every host this runs under takes the
+// program name separately, so it is stripped when the line is handed over.
 export const LINKER_ARGS = [
 	'wasm-ld', '-m', 'wasm32',
 	'-Llib/eh', '-Llib',
@@ -221,13 +225,22 @@ function textSink(onText) {
 	};
 }
 
-async function runCommand(moduleOrBytes, { args, env = [], entries = [], stdin = '', onStdout, onStderr, root: given, stage }) {
-	const root = given ?? buildTree(entries);
-	// The stage is handed back with each chunk so the caller can show the
-	// compiler's and linker's chatter differently from the program's output --
-	// and so that only the program's output keeps its colour.
-	const stdout = textSink((text) => onStdout?.(stage === 'running' ? text : plain(text), stage));
-	const stderr = textSink((text) => onStderr?.(stage === 'running' ? text : plain(text), stage));
+/**
+ * Run a WASI command module in this package's own host.
+ *
+ * @param {WebAssembly.Module|Uint8Array} moduleOrBytes
+ * @param {object} options
+ * @param {string[]} options.args
+ * @param {Array<[string, string|Uint8Array]>} [options.entries]
+ * @param {string} [options.stdin]
+ * @param {string} [options.stage] - which stage this run is, so the caller can
+ *   treat the compiler's chatter differently from the program's output: only the
+ *   program's output keeps its colour.
+ */
+async function runCommand(moduleOrBytes, { args, env = [], entries = [], stdin = '', onStdout, onStderr, stage }) {
+	const root = buildTree(entries);
+	const stdout = textSink((text) => onStdout?.(stage === 'running' ? text : stripAnsi(text), stage));
+	const stderr = textSink((text) => onStderr?.(stage === 'running' ? text : stripAnsi(text), stage));
 
 	// fd 0 is a file holding the caller's stdin: a program that calls `gets`
 	// reads it, and one that does not never looks. The compiler and the linker
@@ -262,21 +275,69 @@ async function runCommand(moduleOrBytes, { args, env = [], entries = [], stdin =
 }
 
 /**
- * Compile *source* with the wasm compiler, link the object it emits, and run it.
+ * Link `object` and the sysroot libraries with lld, through a toolchain the
+ * caller already holds.
+ *
+ * A caller that runs C/C++ on the same page has a Clang runtime from
+ * `@live-codes/clang-wasm`, and its lld is the same program this package ships --
+ * so it links through that instead of fetching a second copy. The three things
+ * this needs from the toolchain are the ones that API documents: the compiled lld
+ * module, a WASI command runner, and a way to read a file back out.
+ */
+async function linkWithToolchain(toolchain, { object, libs, onStdout, onStderr }) {
+	const runtime = toolchain.runtime;
+	const lld = await runtime.getModule(runtime.assetUrls.lld);
+
+	const files = [{ path: 'out.o.wasm', contents: object }];
+	for (const [path, bytes] of Object.entries(libs)) files.push({ path, contents: bytes });
+
+	// `args` is argv *without* the program name, and lld dispatches on argv[0].
+	const command = await toolchain.runCommand(lld, {
+		programName: LINKER_ARGS[0],
+		args: LINKER_ARGS.slice(1),
+		files,
+		stdin: () => null
+	});
+
+	// The toolchain's own host collects output; surface it the same way ours does.
+	if (command.stdout) onStdout?.(stripAnsi(command.stdout), 'linking');
+	if (command.stderr) onStderr?.(stripAnsi(command.stderr), 'linking');
+
+	return { wasm: command.readFile('out.wasm'), exitCode: command.exitCode };
+}
+
+/**
+ * Compile, link and run a Crystal program.
  *
  * @param {object} options
- * @param {string} options.source  the Crystal program
- * @param {object} options.assets  `{ compiler, lld, stdlib, libs }` — the compiler
- *   and lld as bytes or compiled `WebAssembly.Module`, `stdlib` as `{ path: text }`
- *   and `libs` as `{ path: Uint8Array }` (paths already include `lib/…`).
- * @param {string} [options.stdin]  what the program reads from fd 0
- * @param {(stage: string) => void} [options.onStage] `compiling` | `linking` | `running`
- * @param {(text: string) => void} [options.onStdout]
- * @param {(text: string) => void} [options.onStderr]
+ * @param {string} options.source - the program
+ * @param {Record<string, string|Uint8Array>} [options.files] - further sources,
+ *   written beside it, so a program can `require "./helper"` them
+ * @param {object} options.assets - what the loader produced: `compiler` and `lld`
+ *   as `WebAssembly.Module`, `stdlib` as `{ path: text }`, `libs` as
+ *   `{ path: Uint8Array }`
+ * @param {object} [options.toolchain] - a clang-wasm toolchain to link through
+ * @param {string[]} [options.args] - the program's argv, after its own name
+ * @param {string[]} [options.compileArgs] - extra compiler flags
+ * @param {string} [options.stdin]
+ * @param {(stage: string) => void} [options.onStage] - `compiling` | `linking` | `running`
+ * @param {(text: string, stage: string) => void} [options.onStdout]
+ * @param {(text: string, stage: string) => void} [options.onStderr]
  * @returns {Promise<{ wasm: Uint8Array, stdout: string, stderr: string, exitCode: number, phases: object }>}
- *   Throws with `{ stage }` set if a stage fails.
+ *   Throws with `{ stage, diagnostics }` set if a stage fails.
  */
-export async function compileAndRun({ source, assets, stdin = '', onStage, onStdout, onStderr }) {
+export async function compileAndRun({
+	source,
+	files = {},
+	assets,
+	toolchain = null,
+	args = [],
+	compileArgs = [],
+	stdin = '',
+	onStage,
+	onStdout,
+	onStderr
+}) {
 	const { compiler, lld, stdlib, libs } = assets;
 	const phases = {};
 
@@ -288,11 +349,11 @@ export async function compileAndRun({ source, assets, stdin = '', onStage, onStd
 	// 1. compile -----------------------------------------------------------
 	let started = at('compiling');
 	const compilerEntries = [['main.cr', source]];
-	for (const [path, text] of Object.entries(stdlib)) {
-		compilerEntries.push([`src/${path}`, text]);
-	}
+	for (const [path, contents] of Object.entries(files)) compilerEntries.push([path, contents]);
+	for (const [path, text] of Object.entries(stdlib)) compilerEntries.push([`src/${path}`, text]);
+
 	const compiled = await runCommand(compiler, {
-		args: COMPILER_ARGS,
+		args: compilerArgs(compileArgs),
 		env: ['CRYSTAL_PATH=/src'],
 		entries: compilerEntries,
 		onStdout,
@@ -307,37 +368,46 @@ export async function compileAndRun({ source, assets, stdin = '', onStage, onStd
 		// heading over them.
 		const error = new Error('compilation failed');
 		error.stage = 'compiling';
-		error.diagnostics = plain(compiled.stderr || compiled.stdout);
+		error.diagnostics = stripAnsi(compiled.stderr || compiled.stdout);
 		throw error;
 	}
 
 	// 2. link --------------------------------------------------------------
 	started = at('linking');
-	const linkerEntries = [['out.o.wasm', object]];
-	for (const [path, bytes] of Object.entries(libs)) {
-		linkerEntries.push([path, bytes]);
-	}
-	const linked = await runCommand(lld, {
-		args: LINKER_ARGS,
-		entries: linkerEntries,
-		onStdout,
-		onStderr,
-		stage: 'linking'
-	});
-	phases.linking = performance.now() - started;
+	let wasm;
+	if (toolchain) {
+		const linked = await linkWithToolchain(toolchain, { object, libs, onStdout, onStderr });
+		wasm = linked.wasm ?? undefined;
+		if (!wasm) {
+			const error = new Error('linking failed');
+			error.stage = 'linking';
+			throw error;
+		}
+	} else {
+		const linkerEntries = [['out.o.wasm', object]];
+		for (const [path, bytes] of Object.entries(libs)) linkerEntries.push([path, bytes]);
 
-	const wasm = linked.root.contents.get('out.wasm')?.data;
-	if (!wasm) {
-		const error = new Error('linking failed');
-		error.stage = 'linking';
-		error.diagnostics = plain(linked.stderr || linked.stdout);
-		throw error;
+		const linked = await runCommand(lld, {
+			args: LINKER_ARGS,
+			entries: linkerEntries,
+			onStdout,
+			onStderr,
+			stage: 'linking'
+		});
+		wasm = linked.root.contents.get('out.wasm')?.data;
+		if (!wasm) {
+			const error = new Error('linking failed');
+			error.stage = 'linking';
+			error.diagnostics = stripAnsi(linked.stderr || linked.stdout);
+			throw error;
+		}
 	}
+	phases.linking = performance.now() - started;
 
 	// 3. run ---------------------------------------------------------------
 	started = at('running');
 	const program = await runCommand(await WebAssembly.compile(wasm), {
-		args: ['program'],
+		args: [PROGRAM_NAME, ...args],
 		entries: [],
 		stdin,
 		onStdout,
@@ -348,3 +418,5 @@ export async function compileAndRun({ source, assets, stdin = '', onStage, onStd
 
 	return { wasm, stdout: program.stdout, stderr: program.stderr, exitCode: program.exitCode, phases };
 }
+
+export { DECODER };
