@@ -260,7 +260,13 @@ The exception blocker is closed (§6). What is left is the browser:
    itself), and **dropping code nothing needs** — `compiler/` from the shipped stdlib and `libc++.a`
    (a Crystal program is not C++; it needs libc++abi and libunwind for the EH runtime, which stay).
    What is left is mostly `lld.wasm`: 7.8 MB, because it is a *generic* lld and `wasm-opt` barely
-   touches it (20.80 → 20.38 MB). **A wasm-only lld is the next real win, and it is a port.**
+   touches it (20.80 → 20.38 MB). **A wasm-only lld was attempted and is not worth adopting**: it
+   builds and validates (lld compiles for `wasm32-wasip1` almost unmodified once trimmed to the
+   `wasm` driver), but comes out 27.9 MB raw / 9.8 MB gzipped — *larger* than the generic artifact,
+   because lld's LTO is not separable by a flag (it is in `InputFiles.cpp`'s bitcode parsing,
+   `Driver.cpp`'s target init, and `lld/Common`'s codegen flags) and dragging it in is a fork of
+   lld. The detail and the numbers are in
+   [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted).
 3. ~~**The page.**~~ **Done — `public/demo.html`.** An editable editor that compiles, links and
    runs in the tab: `public/demo-worker.js` (fetches and caches the compiled modules) →
    `public/crystal-demo.js` (compile → link → run, ~200 lines, no browser-only API, so

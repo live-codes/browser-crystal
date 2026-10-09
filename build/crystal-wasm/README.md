@@ -503,8 +503,36 @@ Four things did that, in order of size:
   compiler's own link echo confirms it: `wasm-ld out.o.wasm -o out.o -lc`.
 
 What is left is mostly `lld.wasm` — 7.8 MB of the 22.8, because it is a *generic*
-lld (ELF, COFF, Mach-O and wasm) and `wasm-opt` barely touches it (20.80 → 20.38
-MB raw). A wasm-only lld would be the next real win, and it is a port, not a flag.
+lld (ELF, COFF, Mach-O and wasm).
+
+### A wasm-only lld — built, and not adopted
+
+That looked like the next win, so it was attempted from this repo's own LLVM 20
+source. It *works*: `-DLLVM_ENABLE_PROJECTS=lld` configures into the cross build,
+`lldCommon` + `lldWasm` compile for `wasm32-wasip1` once `lld/tools/lld/CMakeLists.txt`
+and `lld.cpp` are trimmed to the one driver, and the result validates in V8.
+
+It is **not smaller**: 27.9 MB raw / 9.8 MB gzipped against the generic artifact's
+20.8 / 7.8. Two findings say why, and they are the reason it is not adopted:
+
+- **lld's LTO is not a flag.** Removing it means patching `lld/wasm/InputFiles.cpp`
+  (its `BitcodeFile` parses bitcode through `llvm::lto::InputFile`),
+  `lld/wasm/Driver.cpp` (which calls `LLVMInitializeWebAssembly*` for LTO), and
+  `lld/Common/` (`TargetOptionsCommandFlags.cpp` and `CommonLinkerContext.cpp` pull
+  in LLVM's code generator for the `-mllvm`/target-option flags). That is a fork of
+  lld, not a configuration. With LTO left in, the linker carries the whole
+  CodeGen/SelectionDAG stack from `LLVMLTO` + `LLVMWebAssemblyCodeGen`.
+- **`CrashRecoveryContext` had to be dealt with.** It is excluded from the WASI
+  build (it needs `setjmp`, which wasi-libc gates behind the not-yet-standardized
+  SJLJ proposal) and lld links it. The fix is a WASI path in the header with the
+  interface intact and recovery as a no-op — which also resolves `Process.cpp`'s
+  references in `LLVMSupport`. Nothing else in the libraries we ship needed it, so
+  it stayed out of the build: an unshipped stub is worse than a documented one.
+
+So the demo keeps clang-wasm's `lld.wasm`. The useful residue is that **lld
+compiles for `wasm32-wasip1` with almost no porting** — the interaction above is
+the only real one — so a wasm-only lld is a fork worth making only if the payload
+ever has to shrink by those 4 MB badly enough to maintain it.
 
 Verified in headless Chrome with `crossOriginIsolated === false`, ~15 s per
 compile after the first run, including `begin`/`rescue`/`ensure`.

@@ -88,7 +88,7 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 
 | | why |
 | --- | --- |
-| **A small first load** | 23 MB gzipped. 11.8 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm — and 7.8 MB is the linker, which is a *generic* lld (ELF, COFF, Mach-O and wasm). A wasm-only lld is the next real win, but it is a port, not a flag. |
+| **A small first load** | 23 MB gzipped. 11.8 MB of that is the compiler — the whole compiler plus the whole standard library compiled to wasm — and 7.8 MB is the linker, which is a *generic* lld (ELF, COFF, Mach-O and wasm). A wasm-only lld was built from our own LLVM source and is *not* smaller: lld's LTO support is not separable by a flag. See [build/crystal-wasm/README.md](build/crystal-wasm/README.md#a-wasm-only-lld--built-and-not-adopted). |
 | **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
 | **`Regex` in a compiled program** | it needs `libpcre2-8.a`, which the demo links — but only because the toolchain list says so; a program that ships its own shims can get further than the samples page does |
 | **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |
