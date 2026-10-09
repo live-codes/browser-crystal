@@ -65,7 +65,7 @@ Four decisions did most of the work, and they are recorded because each was meas
 
 - **The Windows/Linux build tree** — `build/llvm-wasm/` and `build/crystal-wasm/` in the
   repository, which is where the compiler and this payload come from. The 140 MB of
-  libLLVM-for-wasm archives live there too; they are a *build-time* dependency of the
-  compiler, not something a page loads.
+  libLLVM-for-wasm archives are a *build-time* dependency of the compiler (they have their own
+  repository and package now, `@live-codes/llvm-wasm`), not something a page loads.
 - **The `browser_wasi_shim` host** — vendored under `../vendor/`, because it is code, not
   an asset.

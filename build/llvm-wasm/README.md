@@ -1,5 +1,11 @@
 # libLLVM for wasm32-wasip1
 
+> **This pipeline now lives in its own repository** —
+> [`llvm-wasm`](https://github.com/live-codes/llvm-wasm), published as `@live-codes/llvm-wasm` — and
+> that is where changes belong. The copy here is kept until that package is on npm (a fresh clone
+> cannot install what is not published); `build/crystal-wasm/link.sh` accepts either, and prefers
+> `$LLVM_WASM` when it is set.
+
 **Goal:** build the one artifact Crystal's compiler needs and that does not exist
 anywhere to download — `libLLVM` compiled to WebAssembly — so a Crystal compiler
 can eventually run in the browser.

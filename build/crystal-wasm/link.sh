@@ -3,6 +3,10 @@
 #
 #   bash link.sh                 # expects $OUT/crystal.o.wasm from cross-compile.sh
 #
+# The libLLVM comes from @live-codes/llvm-wasm (github.com/live-codes/llvm-wasm):
+# `$LLVM_WASM` if it is set, otherwise the copy in this repo (build/llvm-wasm,
+# which stays until the package is published), otherwise the installed package.
+#
 # Unlike the LLVM probe, the Crystal object defines `_start` itself, so the link
 # uses -nostartfiles; and it pulls LLVM's DynamicLibrary.cpp, so the compat
 # layer's dlopen/dlclose/dlsym/dlerror stubs are needed.
@@ -12,16 +16,29 @@
 # outstanding artifact — see README.
 set -uo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${OUT:-/root/bc-crystal}"
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk-33}"
-LLVM_WASM="${LLVM_WASM:-/mnt/d/DevWork/live-codes/browser-crystal/build/llvm-wasm}"
 PCRE_LIB="${PCRE_LIB:-/root/bc-pcre2/build}"   # wasm libpcre2-8.a, from build-pcre2.sh
+
+if [ -z "${LLVM_WASM:-}" ]; then
+  for candidate in "$HERE/../llvm-wasm" "$HERE/../../node_modules/@live-codes/llvm-wasm"; do
+    if [ -d "$candidate/out/lib" ]; then LLVM_WASM="$candidate"; break; fi
+  done
+fi
+if [ -z "${LLVM_WASM:-}" ] || [ ! -d "$LLVM_WASM/out/lib" ]; then
+  echo "link.sh: no libLLVM found. Set LLVM_WASM, install @live-codes/llvm-wasm," >&2
+  echo "         or keep build/llvm-wasm/ (its out/lib has the archives)." >&2
+  exit 1
+fi
 
 S="$WASI_SDK/share/wasi-sysroot"
 CC="$WASI_SDK/bin/clang"
 EMU="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID -D_WASI_EMULATED_PROCESS_CLOCKS"
 COMPAT="$LLVM_WASM/wasi-compat"
 LIBS=$(find "$LLVM_WASM/out/lib" -name 'libLLVM*.a' | sort | tr '\n' ' ')
+
+echo "libLLVM: $LLVM_WASM"
 
 "$CC" --target=wasm32-wasip1 --sysroot="$S" $EMU -I"$COMPAT/include" -include wasi-compat.h -O1 \
   -c "$COMPAT/compat.c" -o "$OUT/compat.o"

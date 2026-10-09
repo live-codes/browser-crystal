@@ -1,9 +1,12 @@
 # Crossing the Crystal compiler to wasm
 
-This is where the **"validate, then split"** plan starts: build the Crystal
+This is where the **"validate, then split"** plan ran: build the Crystal
 compiler itself as a `wasm32-wasip1` module, linked against the libLLVM produced
-in [`../llvm-wasm`](../llvm-wasm). If that links, the libLLVM package's interface
-is proven by a real consumer and the split is safe.
+in [`../llvm-wasm`](../llvm-wasm). It linked, so the libLLVM's interface is proven
+by a real consumer — and the split has since happened: the libLLVM lives in
+[its own repository](https://github.com/live-codes/llvm-wasm) as
+`@live-codes/llvm-wasm`, and `link.sh` links against whichever copy it is pointed at
+(`$LLVM_WASM`, else the in-repo copy, else the installed package).
 
 **Status: the compiler runs, reads the stdlib, and compiles a program to a wasm
 object that links and runs — exceptions included.** (See "Resolution" below; the

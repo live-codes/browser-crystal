@@ -77,7 +77,9 @@ default `llvm-config` on PATH is 21, which it does not).
 ## 4. Repo layout
 
 ```
-build/llvm-wasm/          libLLVM-for-wasm pipeline
+build/llvm-wasm/          libLLVM-for-wasm pipeline — NOW ITS OWN REPO as @live-codes/llvm-wasm
+                          (D:\DevWork\live-codes\llvm-wasm, §7); this copy stays until that
+                          package is published, and link.sh can use either
   build.sh                  fetch → host tblgen → cross → pack → verify
   fetch.sh                  parallel, resumable download (the network needs it)
   toolchain-wasi.cmake      the wasm32-wasip1 cross toolchain
@@ -294,13 +296,22 @@ and only a build machine ever wants it: libLLVM-for-wasm.
    their `.gz` (`lib/libc.a`), because those keys become paths in the linker's filesystem; and a
    caller's `toolchain` replaces only the *linker* (its lld is the same program), while the sysroot
    libraries still come from this package.
-2. **`@live-codes/llvm-wasm`** — the separation, and the whole of what remains.
-   `build/llvm-wasm/` becomes its own repo and npm package — pipeline, patches, `wasi-compat`, the
-   lock file, and `out/` (the 99 archives) in the tarball — so any LLVM-based port can reuse it as a
-   build-time dependency; this repo then consumes it rather than carrying a 140 MB copy. ~140 MB is
-   fine for a handful of ports and painful for CI, so that README should record the release-asset
-   escape hatch. The plausible consumers are the sibling `browser-*` repositories whose compilers
-   link LLVM (Swift, D, Lean and friends).
+2. ~~**`@live-codes/llvm-wasm`**~~ **Extracted — done, except publishing.** The pipeline and the
+   141 MB of archives are now their own repository, `D:\DevWork\live-codes\llvm-wasm` (first commit
+   `4b4558a`, 2279 files), with a `package.json` for `@live-codes/llvm-wasm`, a `llvm-wasm-path` bin
+   so a build script can find them, a `prepack` check that refuses an incomplete `out/`, and the
+   licences. **It is verified against the real consumer**: with `LLVM_WASM` pointing at the new
+   repository, `link.sh` resolves every symbol, and the compiler it produces runs and reports
+   `LLVM: 20.1.8` — i.e. those are the archives, not a copy that happens to be the right size.
+
+   What is left: (a) **publishing** it, and (b) **deleting this repo's `build/llvm-wasm/`** — which
+   waits on (a), because a fresh clone cannot install a package that is not on npm. `link.sh`
+   resolves in order `$LLVM_WASM`, then the in-repo copy, then the installed package, so both
+   states work and the deletion is a one-line follow-up.
+
+   Sizes: the tarball is **38 MB compressed** (143 MB installed, 2278 files) — friendlier than the
+   141 MB on disk suggests, and within npm's limits. If it ever is not, the escape hatch is a
+   release asset plus a fetch, the shape `@live-codes/clang-wasm` uses.
 3. **Deliberately not now:** upstreaming the `browser_wasi_shim` file-growth fix (our patch exists
    only because upstream grows files quadratically — it needs network access); the wasm-only lld
    (see below — built, and *larger*); and further compiler trimming (11.8 MB gzipped is the floor for
@@ -432,7 +443,9 @@ e6f8dd1  initial commit
 
 ## 10. Cautions
 
-- `build/llvm-wasm/out/` is ~140 MB and **committed on purpose** by the user. Don't "clean" it.
+- `build/llvm-wasm/out/` is ~140 MB and **committed on purpose** by the user. Don't "clean" it — and
+  note that it now has a second home: the `llvm-wasm` repository it was extracted to (§7), which
+  keeps the same files and adds the package around them.
 - `packages/crystal-wasm/assets/crystal/` (the payload, ~22 MB gzipped) is **not** committed —
   regenerate it with `npm run demo:assets` (or `npm run assets` inside the package) and re-pin with
   `node scripts/write-receipts.mjs`. The receipts in `src/asset-receipts.js` *are* committed, and

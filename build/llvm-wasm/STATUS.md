@@ -74,6 +74,7 @@ Two things worth knowing for any other consumer: a compiler built against these 
 processes, signals or sockets are stubs — which is fine, because a compiler does not fork or install
 signal handlers.
 
-**Being extracted.** This directory is to become its own repository and npm package
-(`@live-codes/llvm-wasm`, with the archives in the tarball) so that other LLVM-based ports can reuse
-it as a build-time dependency — [../../HANDOFF.md](../../HANDOFF.md) §7.
+**Extracted.** This directory is now its own repository and package —
+[`llvm-wasm`](https://github.com/live-codes/llvm-wasm), `@live-codes/llvm-wasm`, with the archives in
+the tarball — and that is where changes belong. The copy here is kept until the package is published;
+`build/crystal-wasm/link.sh` accepts either. See [../../HANDOFF.md](../../HANDOFF.md) §7.

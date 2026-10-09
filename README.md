@@ -20,7 +20,9 @@ in the same shape as [`browser-cobol`](https://github.com/live-codes/browser-cob
 required work that existed nowhere else:
 
 - **a libLLVM for `wasm32-wasip1`** — Crystal links LLVM, and no wasm build of it existed to
-  download. It does now: [`build/llvm-wasm/`](build/llvm-wasm/), 99 archives, verified.
+  download. It does now: [`build/llvm-wasm/`](build/llvm-wasm/), 99 archives, verified — and it
+  lives in [its own repository](https://github.com/live-codes/llvm-wasm) as the
+  `@live-codes/llvm-wasm` package, so other LLVM-based ports can reuse it.
 - **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
   every source edit in one idempotent `apply-patches.py`.
 - **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
@@ -134,7 +136,8 @@ package's `build-assets.sh`; their bytes are pinned in the package's
 ```
 public/                     the page and its worker
 packages/crystal-wasm/      the language package: compile → link → run, assets, tests, docs
-build/llvm-wasm/            libLLVM for wasm32-wasip1 (committed output, ~140 MB, on purpose)
+build/llvm-wasm/            libLLVM for wasm32-wasip1 (99 archives, ~140 MB, committed on
+                            purpose); extracted to the llvm-wasm repository as a package
 build/crystal-wasm/         the compiler pipeline, and the lld/exception notes
 ```
 
@@ -160,6 +163,7 @@ authoritative list for what it ships.
 The question this repository opened with — *can Crystal's compiler run in a browser* — is answered:
 it does, the page is the proof, and it is packaged —
 [`@live-codes/crystal-wasm`](packages/crystal-wasm), in the shape
-[`@live-codes/nim-wasm`](https://github.com/live-codes/browser-nim) has, for LiveCodes to use. What
-is left is separating the one artifact here that is not Crystal's — libLLVM-for-wasm, so that other
-LLVM-based ports can reuse it — which is [HANDOFF.md](HANDOFF.md) §7.
+[`@live-codes/nim-wasm`](https://github.com/live-codes/browser-nim) has, for LiveCodes to use. The
+one artifact here that is not Crystal's, libLLVM-for-wasm, has been extracted into
+[its own repository](https://github.com/live-codes/llvm-wasm) as a package; what remains is
+publishing it and dropping this repo's copy. [HANDOFF.md](HANDOFF.md) §7 has the detail.
