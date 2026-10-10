@@ -346,11 +346,19 @@ here, which is this machine's link to jsDelivr — 22.8 MB at ~60 KB/s — not t
    binding was wrong on every platform, not just wasm), the compiler was rebuilt in WSL, and
    `npm run demo:assets` re-pinned the payload. The mismatch is **gone from both links** — the
    compiler's and a program's — which is the warning that started this. `@live-codes/crystal-wasm` is
-   at **0.1.1** in the tree and needs your npm credentials; `@live-codes/llvm-wasm` is unchanged.
-2. **The LiveCodes integration** — the point of all of it, and the one piece that lives in another
-   repository: a `lang-crystal` module (an identity `factory`, `scriptType: 'text/crystal'`, the CDN
-   `baseUrl`, `largeDownload: true`), in the shape `browser-nim`'s module has. Everything it needs is
-   published now.
+   at **0.1.1, published**; `@live-codes/llvm-wasm` is unchanged.
+2. ~~**The LiveCodes integration**~~ **In place, uncommitted in the `livecodes` working tree** — that
+   repository is the user's, so the commit is theirs. Added there: `src/livecodes/languages/crystal/`
+   (the spec, the worker script, and a jest spec — 5 tests pass), registration in `languages.ts`,
+   `crystalWasmBaseUrl` in `vendors.ts` (pinned to `@live-codes/crystal-wasm@0.1.1`), the model
+   aliases, the `scriptType` union in `src/livecodes/models.ts`, the IIFE build list in
+   `scripts/build.js` (a hand-maintained list — easy to miss), a starter template and thumbnail, the
+   `language-info.html` section (its locale strings generated with `npm run i18n-export`), the
+   template list, the docs slider, `vendor-licenses.md`, a docs page, and the README language count.
+   **`tsc --noEmit` is clean and eslint passes.**
+   What is left there: a Playwright case in `e2e/specs/compilers.spec.ts` (the real end-to-end proof,
+   needing a browser and the published package), and the thumbnail is a simple drawn mark rather than
+   the official Crystal logo.
 
 **Facts from the finished work, worth keeping** — they are in the log, not visible in the code:
 
