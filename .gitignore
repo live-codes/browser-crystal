@@ -7,6 +7,10 @@ node_modules/
 __pycache__/
 *.pyc
 
+# The global script build (packages/crystal-wasm/scripts/build-iife.mjs), which is what a
+# page loads from a CDN. Built at publish time; the package's `prepack` makes it.
+packages/crystal-wasm/dist/
+
 # The language package's payload (packages/crystal-wasm/build-assets.sh): about 22 MB
 # gzipped — the compiler (12 MB of it), the linker (8 MB), the standard library
 # (1.3 MB) and the sysroot archives. Too large to commit; regenerate with

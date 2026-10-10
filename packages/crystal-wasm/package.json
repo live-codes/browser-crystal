@@ -14,7 +14,8 @@
       "node": "./src/index.node.js",
       "browser": "./src/index.js",
       "default": "./src/index.js"
-    }
+    },
+    "./iife": "./dist/crystal-wasm.global.js"
   },
   "bin": {
     "crystal-wasm-copy-assets": "./bin/copy-assets.mjs"
@@ -23,6 +24,7 @@
     "src",
     "bin",
     "scripts",
+    "dist",
     "docs",
     "assets",
     "vendor",
@@ -34,8 +36,12 @@
   "scripts": {
     "assets": "bash build-assets.sh",
     "receipts": "node scripts/write-receipts.mjs",
-    "prepack": "node scripts/check-assets.mjs",
+    "build:iife": "node scripts/build-iife.mjs",
+    "prepack": "node scripts/build-iife.mjs && node scripts/check-assets.mjs",
     "test": "node --experimental-wasm-exnref --test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   },
   "keywords": [
     "crystal",
