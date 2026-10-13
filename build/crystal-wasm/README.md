@@ -15,9 +15,30 @@ earlier narrative is kept as the log of how it was found.) What remains is the
 as assets. This was a port of the compiler's environment — the same shape as the
 libLLVM port.
 
+## Crystal 1.22.0
+
+The compiler is built from **Crystal 1.22.0**. Two things changed, and they are worth knowing
+before reading the rest (which is the 1.17-era log; the shape is unchanged):
+
+- **`-Dwithout_mt`.** 1.22 compiles the MT/execution-context scheduler code by default even for
+  a threadless target; on WASI that instantiates `Thread#start`/`#name=` and the block form of
+  `EventLoop#run`, `lock?` and `interrupt?` -- none of which exist -- and then aborts at runtime
+  with `Thread#execution_context cannot be nil`. Passing `-Dwithout_mt` removes the whole class
+  of gaps, so `cross-compile.sh`, `repro.sh`, `try-compile.mjs` and the page's `engine.js` do.
+- **`llc` does the codegen.** Crystal's in-process optimizer/emitter segfaults on 1.22's
+  compiler; `--emit llvm-bc` (unoptimized) does not, and `llc -O3` on that IR both optimizes it
+  and sets WebAssembly's exception model itself. So `cross-compile.sh` emits IR and runs `llc`
+  against LLVM 20. (LLVM 21 lowers a *valid* module whose `catch` never fires; clang/LLVM 22
+  emits an *invalid* one -- so the host stays on LLVM 20.)
+- **`wasm-opt --one-caller-inline-max-function-size=1000`** in `build-assets.sh`: unbounded,
+  Binaryen folded single-caller functions into one 882 KB function that V8's Turbofan cannot
+  compile (a `Zone` OOM in Node).
+
+[FINDINGS.md §11](../../FINDINGS.md) has the narrative.
+
 ## What has to be true for this to work
 
-1. **A native Crystal 1.17.0** to drive the cross-compile. The distribution's own
+1. **A native Crystal 1.22.0** to drive the cross-compile. The distribution's own
    source is used (`share/crystal/src`), so no separate checkout is needed.
 2. **The LLVM bindings pointed at the wasm libLLVM**, not the host's. Crystal
    picks its binding set from `llvm-config --version` and `--targets-built`, and
@@ -40,7 +61,7 @@ libLLVM, and runs.**
 
 ```
 $ node run-wasi.mjs crystal.wasm --version
-Crystal 1.17.0
+Crystal 1.22.0
 
 The compiler was not built in release mode.
 

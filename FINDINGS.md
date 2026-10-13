@@ -389,3 +389,41 @@ compiler runs, reads the standard library, catches exceptions, and compiles a pr
 object that links and runs. What stands between that and an editable playground is the browser
 linking/UI work — not a gap in Crystal's own codegen.
 
+## 11. Crystal 1.22 -- the re-derivation, and the `llc` step
+
+**1.22.0 removes the section 3 blocker.** `Crystal::EventLoop::Wasi` now implements the
+abstract `run`, so the standard library compiles for wasm32 again, and `lib_llvm.cr` still
+accepts LLVM 20 (the range is now 8-23), so the wasm libLLVM did not have to be rebuilt. The
+port is therefore a re-derivation of `apply-patches.py`, and most of the 23 patches still land
+literally. The changes:
+
+- `crystal/event_loop/wasi.cr` -- `open`'s parameter is renamed `filename` -> `path`.
+- **`-Dwithout_mt`.** 1.22 compiles the MT/execution-context scheduler code by default even for
+  a threadless target, which instantiates `Thread#start`/`#name=` and the `EventLoop`
+  block-form `run`/`lock?`/`interrupt?` (all unimplemented on WASI) and then aborts at runtime
+  with `Thread#execution_context cannot be nil`. WASI has no threads, so the build passes
+  `-Dwithout_mt` (`engine.js`, `cross-compile.sh`, `repro.sh`, `try-compile.mjs`) -- the whole
+  class of gaps disappears at once.
+- `crystal/system/wasi/process.cr` -- a new patch: 1.22 dropped `prepare_args` (which
+  `Process#initialize` still calls) and left `spawn` with the pre-1.22 nine-argument shape.
+- `crystal/system/wasi/file_descriptor.cr` -- another new patch: its `system_lock` override
+  is written with untyped parameters, so it does not *replace* the unix one, whose body names
+  `LibC::FlockOp` (absent on WASI). Matching the signature makes the WASI override win.
+
+**The hard part was the host LLVM, not the patches.** Crystal's in-process optimizer and
+object emitter **segfault** on 1.22's compiler -- but only that: `--emit llvm-bc` on the same
+source succeeds, and `llc -O3` on that IR both optimizes it and applies WebAssembly's exception
+model itself. So `cross-compile.sh` now emits IR with the compiler and lets **LLVM 20's `llc`**
+do the codegen and the -O3 run `--release` would have done in-process. That keeps the EH
+lowering the funclet codegen patch is written for and sidesteps the crash. The surrounding
+attempts are recorded because they were dead ends: Ubuntu's 20.1.2 and a from-source 20.1.8 both
+crash on the compiler's IR; LLVM 21 lowers a *valid* module whose `catch` never fires; clang/LLVM
+22 emits an *invalid* one (`catch kind generates 1 operand, target block expects 0`) from the
+funclet IR at every `-O` level.
+
+**And one more, in the payload.** Once built, the compiler ran in Chrome but Node died with
+`Fatal process out of memory: Zone` -- not real memory (RSS 217 MB), and only at V8's
+*tier-up* (`--liftoff-only` ran it fine). Binaryen's `-Oz` inliner, left unbounded, had folded a
+chain of single-caller functions into one **882 KB** function that Turbofan cannot compile;
+capping it with `--one-caller-inline-max-function-size=1000` brings the largest function back to
+174 KB at no size cost, and the module is otherwise unchanged. `build-assets.sh` passes that flag.

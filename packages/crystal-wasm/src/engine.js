@@ -145,7 +145,7 @@ export const PROGRAM_NAME = 'program';
 export const compilerArgs = (extra = []) => [
 	'crystal', 'build', '--cross-compile', '--target=wasm32-unknown-wasi',
 	'-Di_know_what_im_doing', '-Dwithout_playground', '-Dwithout_docs',
-	'-Dwithout_interpreter', '-Duse_pcre2',
+	'-Dwithout_interpreter', '-Duse_pcre2', '-Dwithout_mt',
 	...extra,
 	'-o', 'out.o.wasm', 'main.cr'
 ];

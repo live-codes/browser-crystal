@@ -51,7 +51,13 @@ if [ ! -x "$WASM_OPT" ]; then
   echo "wasm-opt not found at $WASM_OPT — set WASM_OPT= to emsdk's wasm-opt" >&2
   exit 1
 fi
-"$WASM_OPT" -Oz --enable-exception-handling "$OUT/crystal.wasm" -o "$DEST/compiler.wasm" || exit 1
+# `--one-caller-inline-max-function-size=1000` stops Binaryen folding a chain of
+# single-caller functions into one giant one. Left unbounded it produced an 882 KB
+# function that V8's Turbofan cannot compile ("Fatal process out of memory: Zone")
+# -- only Node choked, and only at tier-up; capping it keeps the largest function at
+# ~174 KB with no measurable size cost, and the module is otherwise unchanged.
+"$WASM_OPT" -Oz --enable-exception-handling --one-caller-inline-max-function-size=1000 \
+  "$OUT/crystal.wasm" -o "$DEST/compiler.wasm" || exit 1
 gz "$DEST/compiler.wasm" "$DEST/compiler.wasm.gz"
 rm -f "$DEST/compiler.wasm"
 ls -l "$DEST/compiler.wasm.gz"

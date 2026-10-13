@@ -34,7 +34,7 @@ export CRYSTAL_PATH
 
 echo "=== compile exc.cr -> exc.o.wasm ==="
 "$OUT/bin/crystal-native" build exc.cr \
-  --mattr=+exception-handling --cross-compile --target wasm32-unknown-wasi -o exc.o.wasm
+  -Dwithout_mt --mattr=+exception-handling --cross-compile --target wasm32-unknown-wasi -o exc.o.wasm
 echo "compile rc=$?"
 
 echo "=== link ==="

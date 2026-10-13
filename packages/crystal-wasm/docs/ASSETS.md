@@ -1,6 +1,6 @@
 # The assets
 
-`assets/crystal/` is the payload this package loads: 12 files, ~22 MB gzipped (~68 MB
+`assets/crystal/` is the payload this package loads: 12 files, ~23.5 MB gzipped (~70 MB
 raw). It is **built, not committed** — `assets/` is gitignored — and pinned by
 `src/asset-receipts.js`, which `scripts/write-receipts.mjs` writes from the bytes on
 disk. Every read is checked against those receipts, so a stale copy, a truncated
@@ -10,9 +10,9 @@ download or a host serving something else is reported rather than compiled.
 
 | file | raw | gzipped | |
 | --- | --- | --- | --- |
-| `compiler.wasm.gz` | 35.5 MB | 11.8 MB | the Crystal compiler: `--release`, `--strip-debug`, `wasm-opt -Oz` |
+| `compiler.wasm.gz` | 38.1 MB | 12.45 MB | the Crystal compiler: IR + `llc -O3`, `--strip-debug`, `wasm-opt -Oz` |
 | `lld.wasm.gz` | 21 MB | 7.8 MB | clang-wasm's lld, already gzipped there |
-| `stdlib.json.gz` | 6.3 MB | 1.3 MB | the patched standard library, 1369 files as `{ "path": "contents" }` |
+| `stdlib.json.gz` | 6.7 MB | 1.45 MB | the patched standard library, 1462 files as `{ "path": "contents" }` |
 | `lib/libc.a.gz` | 2.7 MB | 1.1 MB | wasi-libc |
 | `lib/eh/libc++abi.a.gz`, `lib/eh/libunwind.a.gz` | 1.8 MB | 0.48 MB | the wasm exception-handling runtime |
 | `lib/libclang_rt.builtins.a.gz` | 0.5 MB | 0.13 MB | compiler builtins |
@@ -47,8 +47,11 @@ node scripts/write-receipts.mjs
 
 Four decisions did most of the work, and they are recorded because each was measured:
 
-- **`wasm-opt -Oz --enable-exception-handling`** takes the linked compiler from 59 MB to
-  35.5 MB raw (14.5 → 11.8 MB gzipped). **Never `-all`**: one of those passes emits a
+- **`wasm-opt -Oz --enable-exception-handling`** takes the linked compiler from 67 MB to
+  38.1 MB raw (12.45 MB gzipped). It also passes
+  `--one-caller-inline-max-function-size=1000`, without which Binaryen folds a chain of
+  single-caller functions into one 882 KB function that V8's Turbofan cannot compile (a
+  `Zone` OOM in Node, which Chrome tolerates). **Never `-all`**: one of those passes emits a
   module V8 rejects with `unknown import kind 0x7e`, which Binaryen's own validator
   accepts — so a variant has to be validated in V8 to be trusted.
 - **`-Wl,--strip-debug`** at link time: 79 → 59 MB. The `name` section is kept on purpose,

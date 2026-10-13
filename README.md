@@ -27,7 +27,7 @@ required work that existed nowhere else:
   fetch and inflate them too.
 - **the Crystal compiler, ported to WASI** — [`build/crystal-wasm/`](build/crystal-wasm/), with
   every source edit in one idempotent `apply-patches.py`.
-- **Crystal's wasm exception handling** — Crystal 1.17 does not implement it; the fix is a small
+- **Crystal's wasm exception handling** — Crystal 1.22 does not implement it; the fix is a small
   codegen patch plus two LLVM options the C API cannot set. See
   [build/crystal-wasm/README.md §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works).
 
@@ -121,7 +121,7 @@ Verified in headless Chrome with `crossOriginIsolated === false`:
 | **Files, clocks, threads, `fork`, subprocesses** in a *compiled program* | WASI preview 1 here has no sockets, and the demo gives a program an empty filesystem; the compiler itself has one, which is how it reads the stdlib. §5 |
 | **A program that ships its own shims** | the demo links a fixed list of libraries (`libc`, `libc++abi`, `libunwind`, PCRE2, the WASI emulation archives); anything else has to be linked in by hand |
 | **Memory being reclaimed** | wasm32 selects Crystal's no-GC allocator. Fine for a demo, not for a service. §1 |
-| **Crystal newer than 1.17** | the wasm target does not compile on 1.21.0, the then-current release. §3 |
+| **A Crystal other than 1.22.0** | the wasm-EH codegen patch and the `llc` build step are tuned to it; the compiler is pinned at 1.22.0. §3, §11 |
 | **Anything needing the browser to raise its stack** | V8 gives a wasm instance ~1 MB of native stack and a page cannot raise it, so the compiler is built `--release` (optimized frames fit in 700 KB); a debug build does not. [README §Resolution](build/crystal-wasm/README.md#resolution--the-wasm-catch-works) |
 
 ## Verifying
@@ -161,7 +161,7 @@ finds it either there or in a checkout beside this one.
 MIT for the code here, and for the Crystal standard library that ends up inside the modules
 (Crystal is Apache-2.0; the compiled artifacts embed its runtime).
 
-- **Crystal 1.17.0** — Apache-2.0 — the compiler's own source, patched by `apply-patches.py`.
+- **Crystal 1.22.0** — Apache-2.0 — the compiler's own source, patched by `apply-patches.py`.
 - **LLVM 20.1.8** — Apache-2.0 WITH LLVM-exception — built for wasm32-wasip1 by the
   [`llvm-wasm`](https://github.com/live-codes/llvm-wasm) pipeline.
 - **wasi-sdk 33** (clang, wasm-ld's libraries, the sysroot) — Apache-2.0 WITH LLVM-exception / MIT.

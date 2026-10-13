@@ -13,7 +13,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUT:-/root/bc-crystal}"
 SRC="$OUT/src"
-DIST_CRYSTAL="${DIST_CRYSTAL:-/opt/crystal-1.17.0/bin/crystal}"
+DIST_CRYSTAL="${DIST_CRYSTAL:-/opt/crystal-1.22.0/bin/crystal}"
 
 if [ ! -d "$SRC" ]; then
 	echo "no patched source at $SRC — create it (copy the distribution's src and" >&2

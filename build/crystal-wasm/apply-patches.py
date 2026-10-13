@@ -147,14 +147,14 @@ EXEC_PATH_NEW = """    def self.exec_path : String
       end
     end"""
 
-# Crystal 1.17's WASI event loop leaves file open() as a NotImplementedError, so
+# The WASI event loop leaves file open() as a NotImplementedError, so
 # a Crystal program on wasm cannot read a file at all -- which a compiler must.
 # The other event loops (see event_loop/polling.cr) all open with `LibC.open`;
 # WASI can too, because wasi-libc implements open(2) over path_open against the
 # preopened directories. WASI has no O_CLOEXEC and no way to change blocking
 # mode after the fact, so the flags go through untouched and the descriptor is
 # reported blocking (which is what it is).
-WASI_OPEN_OLD = """  def open(filename : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
+WASI_OPEN_OLD = """  def open(path : String, flags : Int32, permissions : File::Permissions, blocking : Bool?) : {System::FileDescriptor::Handle, Bool} | Errno | WinError
     raise NotImplementedError.new("Crystal::Wasi::EventLoop#open")
   end"""
 
@@ -547,6 +547,39 @@ UNWIND_SET_IP_NEW = "    fun set_ip = _Unwind_SetIP(context : Context, ip : LibC
 # (relative path, old, new, marker) -- marker is a string present only in the
 # patched file, needed when `old` survives inside `new` (pure insertions), so that
 # a second run recognises the patch as applied instead of applying it again.
+# `Process#initialize` calls `Crystal::System::Process.prepare_args` and hands the
+# result to `spawn`. 1.22 dropped the WASI `prepare_args` stub that 1.17 had while
+# the caller kept using it, and left WASI's `spawn` with the pre-1.22 nine-argument
+# shape (`command, args, shell, ...`) where the caller now passes eight
+# (`prepared_args, shell, ...`). The compiler reaches `Process` through
+# `Process.run` (see `config.cr`), so this has to typecheck. `spawn` is
+# unimplemented on WASI either way; the signatures only have to agree.
+WASI_PREPARE_ARGS_OLD = """  def self.spawn(command, args, shell, env, clear_env, input, output, error, chdir)
+    raise NotImplementedError.new("Process.spawn")
+  end"""
+
+WASI_PREPARE_ARGS_NEW = """  def self.prepare_args(command, args, shell)
+    raise NotImplementedError.new("Process.prepare_args")
+  end
+
+  def self.spawn(prepared_args, shell, env, clear_env, input, output, error, chdir)
+    raise NotImplementedError.new("Process.spawn")
+  end"""
+
+# `wasi/file_descriptor.cr` requires the unix implementation and then redefines
+# `system_lock`. Its override is written with untyped parameters, which does *not*
+# replace unix's `(blocking : Bool, exclusive : Bool) : Nil` -- it is a separate
+# overload, so a `Bool` call still picks the unix body, which names
+# `LibC::FlockOp` (absent on WASI). Matching the signature makes the WASI override
+# win, and the unix body is never compiled.
+WASI_SYSTEM_LOCK_OLD = """  private def system_lock(blocking, exclusive)
+    raise NotImplementedError.new "Crystal::System::File#system_lock"
+  end"""
+
+WASI_SYSTEM_LOCK_NEW = """  private def system_lock(blocking : Bool, exclusive : Bool) : Nil
+    raise NotImplementedError.new "Crystal::System::File#system_lock"
+  end"""
+
 PATCHES = [
     ("compiler/crystal/tools/doc.cr", DOCS_SHIM_OLD, DOCS_SHIM_NEW, "{% skip_file if flag?(:without_docs) %}"),
     ("compiler/crystal/command/docs.cr", DOCS_CMD_OLD, DOCS_CMD_NEW, "{% skip_file if flag?(:without_docs) %}"),
@@ -555,6 +588,8 @@ PATCHES = [
     ("process/status.cr", STATUS_SIGNAL_OLD, STATUS_SIGNAL_NEW, None),
     ("compiler/crystal/config.cr", EXEC_PATH_OLD, EXEC_PATH_NEW, None),
     ("crystal/event_loop/wasi.cr", WASI_OPEN_OLD, WASI_OPEN_NEW, None),
+    ("crystal/system/wasi/process.cr", WASI_PREPARE_ARGS_OLD, WASI_PREPARE_ARGS_NEW, "Process.prepare_args"),
+    ("crystal/system/wasi/file_descriptor.cr", WASI_SYSTEM_LOCK_OLD, WASI_SYSTEM_LOCK_NEW, None),
     ("raise.cr", WASM_RAISE_STUBS_OLD, WASM_RAISE_STUBS_NEW, None),
     ("raise.cr", WASM_RAISE_UNLESS_OLD, WASM_RAISE_UNLESS_NEW, None),
     ("raise.cr", WASM_RAISE_DEF_OLD, WASM_RAISE_DEF_NEW, None),

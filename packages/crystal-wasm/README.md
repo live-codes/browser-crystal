@@ -16,7 +16,7 @@ Nothing is uploaded, and no cross-origin isolation is required.
 
 - **22 MB gzipped** of assets, loaded once and reused for every run.
 - **Exceptions work**: `raise`/`rescue`/`ensure` on `wasm32-wasip1`, which is not true
-  of upstream Crystal 1.17 and is the reason `build/crystal-wasm/` exists.
+  of upstream Crystal 1.22 and is the reason `build/crystal-wasm/` exists.
 - **stdin and argv** go to the program; further source files can be compiled with it.
 
 ## Use
@@ -151,7 +151,7 @@ was passed in.
   processes, and the program gets an empty filesystem.
 - **A fixed set of libraries**: `libc`, `libc++abi`, `libunwind`, PCRE2 and the WASI
   emulation archives. Anything else has to be linked in by hand.
-- **Crystal is pinned at 1.17.0**: the wasm target does not build on newer releases.
+- **Crystal is pinned at 1.22.0**: the wasm-EH codegen patch and the `llc` build step are tuned to it.
 
 ## Rebuilding the payload
 

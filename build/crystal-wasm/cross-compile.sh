@@ -6,9 +6,10 @@
 # This is the beginning of the port, not a finished pipeline.
 set -uo pipefail
 
-CRYSTAL="${CRYSTAL:-/opt/crystal-1.17.0/bin/crystal}"
-CRYSTAL_SRC="${CRYSTAL_SRC:-/opt/crystal-1.17.0/share/crystal/src}"
+CRYSTAL="${CRYSTAL:-/opt/crystal-1.22.0/bin/crystal}"
+CRYSTAL_SRC="${CRYSTAL_SRC:-/opt/crystal-1.22.0/share/crystal/src}"
 OUT="${OUT:-/root/bc-crystal}"
+LLC="${LLC:-/usr/lib/llvm-20/bin/llc}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$OUT"
@@ -30,7 +31,7 @@ python3 "$HERE/apply-patches.py" "$SRC" || exit 1
 export CRYSTAL_PATH="$SRC:lib"
 
 # Crystal reads its LLVM binding set from llvm-config, and link flags from
-# LLVM_LDFLAGS. The host's llvm-config reports the *host* LLVM (18), which would
+# LLVM_LDFLAGS. The host's llvm-config reports the *host* LLVM, which would
 # select the wrong bindings for a compiler whose target libLLVM is 20.1.8 -- so
 # LLVM_CONFIG points at this shim and the version vars are set explicitly.
 cat > "$OUT/llvm-config" <<'EOF'
@@ -53,16 +54,9 @@ export LLVM_LDFLAGS=""   # the real link is done by hand: wasi-sdk + the llvm-wa
 cd "$SRC" || exit 1
 
 echo "=== crystal build compiler/crystal.cr --target wasm32-unknown-wasi ==="
-# `RELEASE=1` adds --release (-O3 --single-module). This is not just a size win:
-# the debug build is 96 MB, mostly DWARF, but optimized code also has much
-# smaller frames -- and the deep AST passes (CleanupTransformer) are bounded by
-# V8's *native* stack, which a browser gives about 1 MiB and will not raise.
-# See the "Resolution" note in README.md.
-RELEASE_FLAGS=()
-if [ -n "${RELEASE:-}" ]; then
-  RELEASE_FLAGS=(--release)
-  echo "RELEASE build enabled"
-fi
+# The compiler is no longer asked to optimize or to emit the object itself:
+# `--release` (-O3, in-process) is what segfaults on this module, so the IR is
+# emitted unoptimized and `llc -O3` below optimizes and emits it (see the note there).
 
 "$CRYSTAL" build compiler/crystal.cr \
   -Di_know_what_im_doing \
@@ -70,13 +64,29 @@ fi
   -Dwithout_docs \
   -Dwithout_interpreter \
   -Duse_pcre2 \
-  "${RELEASE_FLAGS[@]}" \
+  -Dwithout_mt \
   --mattr=+exception-handling \
   --cross-compile --target wasm32-unknown-wasi \
-  -o "$OUT/crystal.o.wasm"
+  --emit llvm-bc \
+  --single-module \
+  -o "$OUT/crystal.bc"
 rc=$?
-echo "rc=$rc"
-ls -l "$OUT"/*.wasm 2>/dev/null
+echo "crystal -> llvm-bc rc=$rc"
+[ "$rc" -eq 0 ] || exit $rc
+ls -l "$OUT/crystal.bc" 2>/dev/null
+
+# `llc` does the codegen. Crystal's own in-process emitter segfaults on a module
+# this large (1.22's compiler; 1.17 was small enough to miss it), while `llc -O3`
+# on the same IR does not -- and llc applies WebAssembly's exception model itself,
+# so EH is lowered by LLVM 20, the lowering Crystal's funclet codegen patch is
+# written for. `llc` also carries the -O3 middle-end `--release` would have run
+# in-process.
+"$LLC" -march=wasm32 -mattr=+exception-handling \
+  -wasm-enable-eh -wasm-use-legacy-eh=false -O3 -filetype=obj \
+  "$OUT/crystal.bc" -o "$OUT/crystal.o.wasm"
+rc=$?
+echo "llc rc=$rc"
+ls -l "$OUT/crystal.o.wasm" 2>/dev/null
 exit $rc
 
 # Next blockers, in order:

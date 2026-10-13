@@ -15,6 +15,25 @@ capability: a `crystal` language package for LiveCodes (§7). See §6 for the (c
 
 ---
 
+## 0. Update -- Crystal 1.22.0
+
+The compiler has been ported to **Crystal 1.22.0** ([FINDINGS.md §11](FINDINGS.md) is the
+narrative; [build/crystal-wasm/README.md](build/crystal-wasm/README.md) the detail). Two
+things a new session must know, because both are load-bearing:
+
+- Build with **`-Dwithout_mt`** (WASI has no threads; 1.22 otherwise compiles the MT scheduler
+  code and aborts), and let **`llc`** do the codegen -- `cross-compile.sh` emits IR and runs
+  `llc -O3`, because Crystal's in-process `--release`/emitter segfaults on 1.22's compiler.
+  The host LLVM stays at 20.
+- `build-assets.sh` passes **`--one-caller-inline-max-function-size=1000`** to `wasm-opt`;
+  without it Binaryen builds an 882 KB function that V8's Turbofan cannot compile in Node.
+
+Everything below describes the 1.17-era work and is accurate in shape; read the version
+numbers as 1.22.0 now. The port is verified: `npm test` green and all eight samples run in
+the page.
+
+---
+
 ## 1. Start here
 
 The whole thing runs in the **`racket-build` WSL distro** (Ubuntu 24.04, root). From Windows:

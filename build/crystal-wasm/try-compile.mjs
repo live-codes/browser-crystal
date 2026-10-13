@@ -71,7 +71,7 @@ const command = await toolchain.runCommand(module, {
 	args: [
 		'build', '--cross-compile', '--target=wasm32-unknown-wasi',
 		'-Di_know_what_im_doing', '-Dwithout_playground', '-Dwithout_docs',
-		'-Dwithout_interpreter', '-Duse_pcre2',
+		'-Dwithout_interpreter', '-Duse_pcre2', '-Dwithout_mt',
 		'-o', 'out.o.wasm', 'main.cr',
 	],
 	env: { CRYSTAL_PATH: '/src' },

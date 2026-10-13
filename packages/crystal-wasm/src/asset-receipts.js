@@ -3,14 +3,14 @@
 // The payload this package ships, pinned by content: every asset is checked
 // against these bytes and this digest when it is read, so a stale copy, a
 // truncated download or a host serving something else is named rather than
-// compiled. 12 files, 22.8 MB gzipped.
+// compiled. 12 files, 23.5 MB gzipped.
 //
 // Re-pin with `node scripts/write-receipts.mjs` after rebuilding the assets.
 
 export const ASSET_RECEIPTS = {
 	"compiler.wasm.gz": {
-		"bytes": 11806297,
-		"sha256": "f40e3d994dec0938e40137b5a520d39d9d3c205c65a6d386a443b46ee08e44e8"
+		"bytes": 12453200,
+		"sha256": "a26428ed4f30cd805f30f9318fa0b98302b06137529e58e251c40a9ccdff3aa5"
 	},
 	"lib/eh/libc++abi.a.gz": {
 		"bytes": 472129,
@@ -53,7 +53,7 @@ export const ASSET_RECEIPTS = {
 		"sha256": "f842a9b5df3c6d326f0260bfd313c11c2e22bc8b8ae0387deede9a4af55779cd"
 	},
 	"stdlib.json.gz": {
-		"bytes": 1339858,
-		"sha256": "ef4778f426755622f227e05921085b049d2c434f8397f395beb0197d730b2331"
+		"bytes": 1453383,
+		"sha256": "e5a0d6cc21b4c2e6f762ccf6fe3e82e360e92e31219e56081f361c660dd9f3f2"
 	}
 };
