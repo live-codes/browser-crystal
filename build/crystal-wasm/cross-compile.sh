@@ -9,6 +9,7 @@ set -uo pipefail
 CRYSTAL="${CRYSTAL:-/opt/crystal-1.22.0/bin/crystal}"
 CRYSTAL_SRC="${CRYSTAL_SRC:-/opt/crystal-1.22.0/share/crystal/src}"
 OUT="${OUT:-/root/bc-crystal}"
+OPT="${OPT:-/usr/lib/llvm-20/bin/opt}"
 LLC="${LLC:-/usr/lib/llvm-20/bin/llc}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -54,9 +55,8 @@ export LLVM_LDFLAGS=""   # the real link is done by hand: wasi-sdk + the llvm-wa
 cd "$SRC" || exit 1
 
 echo "=== crystal build compiler/crystal.cr --target wasm32-unknown-wasi ==="
-# The compiler is no longer asked to optimize or to emit the object itself:
-# `--release` (-O3, in-process) is what segfaults on this module, so the IR is
-# emitted unoptimized and `llc -O3` below optimizes and emits it (see the note there).
+# The compiler is asked only to emit IR: it does not optimize or emit the object
+# itself (see the note below on why), which is done by `opt` and `llc`.
 
 "$CRYSTAL" build compiler/crystal.cr \
   -Di_know_what_im_doing \
@@ -75,15 +75,29 @@ echo "crystal -> llvm-bc rc=$rc"
 [ "$rc" -eq 0 ] || exit $rc
 ls -l "$OUT/crystal.bc" 2>/dev/null
 
-# `llc` does the codegen. Crystal's own in-process emitter segfaults on a module
-# this large (1.22's compiler; 1.17 was small enough to miss it), while `llc -O3`
-# on the same IR does not -- and llc applies WebAssembly's exception model itself,
-# so EH is lowered by LLVM 20, the lowering Crystal's funclet codegen patch is
-# written for. `llc` also carries the -O3 middle-end `--release` would have run
-# in-process.
+# Crystal's own in-process `--release` segfaults on this compiler: LLVM 20's
+# `WebAssembly CFG Stackify` cannot handle the optimized form of the macro-generated
+# `pretty_print` methods. So the optimization is done by the `opt` tool -- the same
+# -O3 pipeline Crystal would have run in-process, and the reason this build is as
+# fast as the 1.17 one -- with those methods marked `optnone` so the optimizer skips
+# them (`optnone` requires `noinline`), and `llc` then codegens (it applies
+# WebAssembly's exception model too, which the LLVM C API cannot set). See README
+# "Crystal 1.22".
+#
+# The names are read back out of the IR rather than listed by hand, so this keeps
+# working when the compiler changes. `opt -S` dumps the whole module, so the list is
+# built from its `define` lines only.
+"$OPT" -S "$OUT/crystal.bc" -o - 2>/dev/null \
+  | grep '^define ' | grep -oE '@"[^"]*pretty_print[^"]*"' \
+  | sed 's/^@"//; s/"$//' | sort -u \
+  | awk '{print $0",optnone"} {print $0",noinline"}' > "$OUT/no-opt.csv"
+echo "keeping $(($(wc -l < "$OUT/no-opt.csv") / 2)) functions out of the optimizer"
+"$OPT" -passes=forceattrs -forceattrs-csv-path="$OUT/no-opt.csv" \
+  "$OUT/crystal.bc" -o "$OUT/crystal.marked.bc" || exit $?
+"$OPT" -O3 "$OUT/crystal.marked.bc" -o "$OUT/crystal.opt.bc" || exit $?
 "$LLC" -march=wasm32 -mattr=+exception-handling \
   -wasm-enable-eh -wasm-use-legacy-eh=false -O3 -filetype=obj \
-  "$OUT/crystal.bc" -o "$OUT/crystal.o.wasm"
+  "$OUT/crystal.opt.bc" -o "$OUT/crystal.o.wasm"
 rc=$?
 echo "llc rc=$rc"
 ls -l "$OUT/crystal.o.wasm" 2>/dev/null

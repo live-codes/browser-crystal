@@ -1,6 +1,6 @@
 # The assets
 
-`assets/crystal/` is the payload this package loads: 12 files, ~23.5 MB gzipped (~70 MB
+`assets/crystal/` is the payload this package loads: 12 files, ~23 MB gzipped (~69 MB
 raw). It is **built, not committed** — `assets/` is gitignored — and pinned by
 `src/asset-receipts.js`, which `scripts/write-receipts.mjs` writes from the bytes on
 disk. Every read is checked against those receipts, so a stale copy, a truncated
@@ -10,7 +10,7 @@ download or a host serving something else is reported rather than compiled.
 
 | file | raw | gzipped | |
 | --- | --- | --- | --- |
-| `compiler.wasm.gz` | 38.1 MB | 12.45 MB | the Crystal compiler: IR + `llc -O3`, `--strip-debug`, `wasm-opt -Oz` |
+| `compiler.wasm.gz` | 36.1 MB | 11.89 MB | the Crystal compiler: `opt -O3` + `llc`, `--strip-debug`, `wasm-opt -Oz` |
 | `lld.wasm.gz` | 21 MB | 7.8 MB | clang-wasm's lld, already gzipped there |
 | `stdlib.json.gz` | 6.7 MB | 1.45 MB | the patched standard library, 1462 files as `{ "path": "contents" }` |
 | `lib/libc.a.gz` | 2.7 MB | 1.1 MB | wasi-libc |
@@ -47,8 +47,8 @@ node scripts/write-receipts.mjs
 
 Four decisions did most of the work, and they are recorded because each was measured:
 
-- **`wasm-opt -Oz --enable-exception-handling`** takes the linked compiler from 67 MB to
-  38.1 MB raw (12.45 MB gzipped). It also passes
+- **`wasm-opt -Oz --enable-exception-handling`** takes the linked compiler from 60 MB to
+  36.1 MB raw (11.89 MB gzipped). It also passes
   `--one-caller-inline-max-function-size=1000`, without which Binaryen folds a chain of
   single-caller functions into one 882 KB function that V8's Turbofan cannot compile (a
   `Zone` OOM in Node, which Chrome tolerates). **Never `-all`**: one of those passes emits a

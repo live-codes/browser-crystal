@@ -22,9 +22,12 @@ narrative; [build/crystal-wasm/README.md](build/crystal-wasm/README.md) the deta
 things a new session must know, because both are load-bearing:
 
 - Build with **`-Dwithout_mt`** (WASI has no threads; 1.22 otherwise compiles the MT scheduler
-  code and aborts), and let **`llc`** do the codegen -- `cross-compile.sh` emits IR and runs
-  `llc -O3`, because Crystal's in-process `--release`/emitter segfaults on 1.22's compiler.
-  The host LLVM stays at 20.
+  code and aborts). Crystal's in-process `--release` segfaults on 1.22's compiler (an LLVM 20
+  `WebAssembly CFG Stackify` bug on the optimized `pretty_print` methods), so `cross-compile.sh`
+  runs the optimization and codegen as tools: the `pretty_print` methods are marked `optnone`,
+  **`opt -O3`** runs the middleware `--release` would have, and **`llc`** emits the object. The
+  host LLVM stays at 20. Do not drop the `opt -O3` step -- `llc` alone does not optimize the
+  module, and the compiler is ~2x slower at semantic analysis without it.
 - `build-assets.sh` passes **`--one-caller-inline-max-function-size=1000`** to `wasm-opt`;
   without it Binaryen builds an 882 KB function that V8's Turbofan cannot compile in Node.
 

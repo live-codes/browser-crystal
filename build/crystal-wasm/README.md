@@ -25,11 +25,17 @@ before reading the rest (which is the 1.17-era log; the shape is unchanged):
   `EventLoop#run`, `lock?` and `interrupt?` -- none of which exist -- and then aborts at runtime
   with `Thread#execution_context cannot be nil`. Passing `-Dwithout_mt` removes the whole class
   of gaps, so `cross-compile.sh`, `repro.sh`, `try-compile.mjs` and the page's `engine.js` do.
-- **`llc` does the codegen.** Crystal's in-process optimizer/emitter segfaults on 1.22's
-  compiler; `--emit llvm-bc` (unoptimized) does not, and `llc -O3` on that IR both optimizes it
-  and sets WebAssembly's exception model itself. So `cross-compile.sh` emits IR and runs `llc`
-  against LLVM 20. (LLVM 21 lowers a *valid* module whose `catch` never fires; clang/LLVM 22
-  emits an *invalid* one -- so the host stays on LLVM 20.)
+- **`opt` optimizes, `llc` codegens, and one function family is excused.** Crystal's own
+  in-process `--release` segfaults on this compiler: LLVM 20's `WebAssembly CFG Stackify` cannot
+  lower the optimized form of the macro-generated `pretty_print` methods. So `cross-compile.sh`
+  marks those ~100 methods `optnone`+`noinline` (their names are read back out of the IR, not
+  listed by hand), runs the ordinary `opt -O3` pipeline -- the same middleware `--release` would
+  have run in-process -- and then `llc -O3` for the object (it applies WebAssembly's exception
+  model too, which the LLVM C API cannot set). **This is what fixed the compile-time
+  regression:** `llc -O3` on its own does *not* optimize the module (41,102 functions in,
+  41,102 out; `opt -O3` takes it to 11,515), and the compiler was ~2x slower at semantic
+  analysis because of it. Measured semantic analysis: 0.78 s with the middleware, 1.86 s
+  without, 0.89 s for the 1.17 build.
 - **`wasm-opt --one-caller-inline-max-function-size=1000`** in `build-assets.sh`: unbounded,
   Binaryen folded single-caller functions into one 882 KB function that V8's Turbofan cannot
   compile (a `Zone` OOM in Node).
