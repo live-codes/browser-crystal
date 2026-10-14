@@ -1,6 +1,6 @@
 {
   "name": "@live-codes/crystal-wasm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Run Crystal in the browser, on the Crystal compiler compiled to WebAssembly",
   "type": "module",
   "license": "MIT",
