@@ -389,7 +389,7 @@ compiler runs, reads the standard library, catches exceptions, and compiles a pr
 object that links and runs. What stands between that and an editable playground is the browser
 linking/UI work — not a gap in Crystal's own codegen.
 
-## 11. Crystal 1.22 -- the re-derivation, and the `llc` step
+## 11. Crystal 1.22 -- the re-derivation, and the optimizer
 
 **1.22.0 removes the section 3 blocker.** `Crystal::EventLoop::Wasi` now implements the
 abstract `run`, so the standard library compiles for wasm32 again, and `lib_llvm.cr` still
@@ -410,16 +410,39 @@ literally. The changes:
   is written with untyped parameters, so it does not *replace* the unix one, whose body names
   `LibC::FlockOp` (absent on WASI). Matching the signature makes the WASI override win.
 
-**The hard part was the host LLVM, not the patches.** Crystal's in-process optimizer and
-object emitter **segfault** on 1.22's compiler -- but only that: `--emit llvm-bc` on the same
-source succeeds, and `llc -O3` on that IR both optimizes it and applies WebAssembly's exception
-model itself. So `cross-compile.sh` now emits IR with the compiler and lets **LLVM 20's `llc`**
-do the codegen and the -O3 run `--release` would have done in-process. That keeps the EH
-lowering the funclet codegen patch is written for and sidesteps the crash. The surrounding
-attempts are recorded because they were dead ends: Ubuntu's 20.1.2 and a from-source 20.1.8 both
-crash on the compiler's IR; LLVM 21 lowers a *valid* module whose `catch` never fires; clang/LLVM
-22 emits an *invalid* one (`catch kind generates 1 operand, target block expects 0`) from the
-funclet IR at every `-O` level.
+**The hard part was the host toolchain, not the patches.** Crystal's in-process `--release`
+optimizer/emitter **segfaults** on 1.22's compiler, and the crash is specific: LLVM 20's
+`WebAssembly CFG Stackify` cannot lower the optimized form of the macro-generated `pretty_print`
+methods (`llc -debug-pass=Executions` named it exactly). The way round it is to mark those ~100
+methods `optnone`+`noinline` -- their names are read back out of the IR, so the list keeps
+working when the compiler changes -- and then do the optimization and codegen as tools: `opt
+-O3` for the middleware `--release` would have run in-process, and `llc` for the object (it
+also applies WebAssembly's exception model, which the LLVM C API cannot set). Both stay on
+LLVM 20: LLVM 21 lowers a *valid* module whose `catch` never fires, and clang/LLVM 22 emits an
+*invalid* one (`catch kind generates 1 operand, target block expects 0`) from the funclet IR at
+every `-O` level.
+
+**Why that mattered more than it looked.** `llc -O3` on its own does *not* optimize the module
+-- 41,102 functions in, 41,102 out -- where `opt -O3` takes it to 11,515. The first version of
+this port used `llc` alone, and the compiler was **~2x slower at semantic analysis** than the
+1.17 one because of it. It was never the source or the standard library: native, the 1.17 and
+1.22 compilers are identical at semantic analysis, and crossing the 1.22 compiler with the 1.17
+stdlib recovered only a little.
+
+Measured on an idle machine, three interleaved passes of `Semantic (top level)` for
+`puts "hello"`:
+
+| build | semantic analysis |
+| --- | --- |
+| previous (`llc -O3` only) | 1.354 / 1.489 / 1.827 s |
+| **this one (`opt -O3` then `llc`)** | **0.640 / 0.701 / 0.713 s** |
+| 1.17 | 0.780 / 0.770 / 0.927 s |
+
+So the port is faster than what it replaces. The payload is smaller too: the shipped compiler
+is 36.1 MB raw and 11.89 MB gzipped against 38.1 / 12.45, the payload 23.0 MB against 23.5, and
+the linked module 59.6 MB against 66.7. The page compiles the hello sample in 1.2-1.5 s warm --
+2.3 s for the first run, which also fetches and compiles the assets -- against the ~2.0 s the
+1.17 build was measured at.
 
 **And one more, in the payload.** Once built, the compiler ran in Chrome but Node died with
 `Fatal process out of memory: Zone` -- not real memory (RSS 217 MB), and only at V8's
